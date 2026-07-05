@@ -57,6 +57,29 @@ COMPONENT_GROUP = {
 }
 
 COMPONENTS = ["min", "gp", "fgm", "fga", "fg3m", "ftm", "fta", "reb", "ast", "stl", "blk", "tov"]
+# Opportunity components that scale with role (everything except games played).
+ROLE_COMPONENTS = [c for c in COMPONENTS if c != "gp"]
+# How much of a minutes trend to extrapolate forward (damped, not blind).
+ROLE_DAMP = 0.4
+
+
+def _role_trend_mult(minutes_newest_first, damp=ROLE_DAMP, min_floor=8.0):
+    """
+    Opportunity multiplier from a player's minutes trajectory. Rising minutes give
+    >1 (role expanding), falling give <1 (role shrinking). Damped so we nudge toward
+    the trend rather than blindly extrapolating, and clamped to a sane band.
+    Note: a breakout from near-zero minutes has no trend to read -- that case needs
+    external opportunity data (a real minutes projection), not this signal.
+    """
+    mins = [m or 0 for m in minutes_newest_first]
+    if len(mins) < 2:
+        return 1.0
+    recent, older = mins[0], mins[1:]
+    prev = sum(older) / len(older)
+    if recent < min_floor and prev < min_floor:
+        return 1.0
+    rel = (recent - prev) / max(prev, min_floor)
+    return max(0.85, min(1.20, 1.0 + damp * rel))
 
 
 def age_multiplier(age: float | None, group: str | None) -> float:
@@ -113,6 +136,15 @@ def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1
         for comp in COMPONENTS:
             mult = age_multiplier(proj_age, COMPONENT_GROUP.get(comp))
             line[comp] = base[comp] * mult
+
+        # Role/opportunity trend: nudge volume by the player's minutes trajectory,
+        # so an expanding role projects up and a fading vet down. Targets the
+        # veteran-collapse busts the backtest exposed. (Breakouts from near-zero
+        # minutes still need external opportunity data -- that's the next step.)
+        role_mult = _role_trend_mult([h.get("min") for h in history])
+        for comp in ROLE_COMPONENTS:
+            line[comp] *= role_mult
+        line["role_mult"] = round(role_mult, 3)
 
         # Injury-history-aware games projection. Blend the recency-weighted games
         # with the player's BEST recent season: a one-off injury is rescued by
@@ -214,6 +246,10 @@ def _selftest() -> None:
     seasons = [{1: young[0], 2: vet[0]}, {1: young[1], 2: vet[1]}, {1: young[2], 2: vet[2]}]
     projected, aged = project_players(seasons)
     assert aged == 2
+
+    # Role trend: youngster's minutes rise (32<-30<-26) -> mult>1; vet falls -> mult<1.
+    assert projected[1]["role_mult"] > 1.0, projected[1]["role_mult"]
+    assert projected[2]["role_mult"] < 1.0, projected[2]["role_mult"]
 
     base_young = _weighted_line(young)
     base_vet = _weighted_line(vet)
