@@ -105,7 +105,8 @@ def _weighted_line(history: list[dict]) -> dict:
     }
 
 
-def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1) -> tuple[dict, int]:
+def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1,
+                    role_damp: float = ROLE_DAMP) -> tuple[dict, int]:
     """
     seasons_newest_first: list of {nba_id: line}, newest season first.
     Returns ({nba_id: projected_line}, n_players_with_age) for the upcoming season.
@@ -141,7 +142,7 @@ def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1
         # so an expanding role projects up and a fading vet down. Targets the
         # veteran-collapse busts the backtest exposed. (Breakouts from near-zero
         # minutes still need external opportunity data -- that's the next step.)
-        role_mult = _role_trend_mult([h.get("min") for h in history])
+        role_mult = _role_trend_mult([h.get("min") for h in history], damp=role_damp)
         for comp in ROLE_COMPONENTS:
             line[comp] *= role_mult
         line["role_mult"] = round(role_mult, 3)

@@ -78,7 +78,7 @@ def _values_by_id(board: list[dict]) -> dict:
 
 def run_backtest(target_season: str | None = None, min_gp: int = 20) -> None:
     from ingest.nba_boxscores import get_season_boxscores, recent_completed_seasons
-    from engine.projection import project_players
+    from engine.projection import project_players, ROLE_DAMP
     from engine.value import compute_values
     from engine.league_config import standard_9cat
 
@@ -95,10 +95,12 @@ def run_backtest(target_season: str | None = None, min_gp: int = 20) -> None:
     actual_board = compute_values(get_season_boxscores(target_season)[0], cfg, min_gp=min_gp)
     actual = _values_by_id(actual_board)
 
-    # Our model: aging + multi-season projection built from prior seasons only.
     prior_lines = [get_season_boxscores(s)[0] for s in priors]
-    proj_board = compute_values(project_players(prior_lines)[0], cfg, min_gp=min_gp)
-    ours = _values_by_id(proj_board)
+    # Ablation: our model with the role-trend ON vs OFF, to isolate its effect.
+    proj_on = compute_values(project_players(prior_lines, role_damp=ROLE_DAMP)[0], cfg, min_gp=min_gp)
+    proj_off = compute_values(project_players(prior_lines, role_damp=0.0)[0], cfg, min_gp=min_gp)
+    ours_on = _values_by_id(proj_on)
+    ours_off = _values_by_id(proj_off)
 
     # Baseline: last season's actual value, used as-is to predict this season.
     baseline = _values_by_id(compute_values(get_season_boxscores(priors[0])[0], cfg, min_gp=min_gp))
@@ -107,32 +109,32 @@ def run_backtest(target_season: str | None = None, min_gp: int = 20) -> None:
         common = [i for i in pred if i in actual]
         return spearman([pred[i] for i in common], [actual[i] for i in common]), len(common)
 
-    our_c, n_our = corr(ours)
-    base_c, n_base = corr(baseline)
+    base_c, _ = corr(baseline)
+    off_c, _ = corr(ours_off)
+    on_c, n = corr(ours_on)
 
     actual_top30 = {r["nba_id"] for r in actual_board[:30]}
-    hits = sum(1 for r in proj_board[:30] if r["nba_id"] in actual_top30)
+    hits = sum(1 for r in proj_on[:30] if r["nba_id"] in actual_top30)
 
-    print(f"Players compared: {n_our}")
-    print(f"  Spearman  ours vs actual:      {our_c:.3f}")
-    print(f"  Spearman  baseline vs actual:  {base_c:.3f}   (naive: repeat last season)")
-    delta = our_c - base_c
-    verdict = "beats baseline" if delta > 0.005 else ("ties baseline" if abs(delta) <= 0.005 else "TRAILS baseline")
-    print(f"  -> our projection {verdict} by {delta:+.3f}")
+    print(f"Players compared: {n}   (Spearman: 1.0 = perfect, higher = better)")
+    print(f"  naive baseline (repeat last season):   {base_c:.3f}")
+    print(f"  ours, role-trend OFF:                  {off_c:.3f}")
+    print(f"  ours, role-trend ON:                   {on_c:.3f}")
+    print(f"  -> role-trend adds:  {on_c - off_c:+.3f}   |   vs baseline:  {on_c - base_c:+.3f}")
     print(f"  Top-30 hit rate: {hits}/30 of our projected top 30 finished top 30\n")
 
     # Notable misses, ranked within the common set (insight, not just a number).
+    ours = ours_on
     common = [i for i in ours if i in actual]
     pr = {i: r for r, i in enumerate(sorted(common, key=lambda i: ours[i], reverse=True), 1)}
     ar = {i: r for r, i in enumerate(sorted(common, key=lambda i: actual[i], reverse=True), 1)}
-    name = {r["nba_id"]: r["name"] for r in proj_board}
-    moves = sorted(common, key=lambda i: ar[i] - pr[i])  # neg = we underrated (breakout)
+    name = {r["nba_id"]: r["name"] for r in proj_on}
 
     print("Biggest misses -- we ranked HIGH, they finished LOW (busts):")
     for i in sorted(common, key=lambda i: ar[i] - pr[i], reverse=True)[:5]:
         print(f"   {(name.get(i) or '?'):<26} projected #{pr[i]:<3} -> actual #{ar[i]}")
     print("\nBiggest misses -- we ranked LOW, they finished HIGH (breakouts we missed):")
-    for i in moves[:5]:
+    for i in sorted(common, key=lambda i: ar[i] - pr[i])[:5]:
         print(f"   {(name.get(i) or '?'):<26} projected #{pr[i]:<3} -> actual #{ar[i]}")
 
 
@@ -150,4 +152,5 @@ if __name__ == "__main__":
     if "--selftest" in sys.argv:
         _selftest()
     else:
-        run_backtest()
+        seasons = [a for a in sys.argv[1:] if not a.startswith("-")]
+        run_backtest(seasons[0] if seasons else None)
