@@ -10,8 +10,11 @@ summed over active (non-punt) cats, then value-over-replacement.
 Points leagues: weighted sum of stats, then VOR.
 
 basis:
-  "total"    (default) -- per-game stats * games played, i.e. season totals, so
-             availability counts. This is standard for a draft / total-value board.
+  "availability_adjusted" (default; alias: "total") -- per-game stats scaled by
+             games played ** AVAIL_ALPHA, so availability counts. Standard for a
+             draft / total-value board. ("total" is accepted as an alias for
+             backwards compatibility; despite the name this is NOT raw season
+             totals -- see AVAIL_ALPHA below.)
   "per_game" -- rate stats only; ignores availability (useful for weekly streaming).
 
 Run from the repo root:
@@ -31,13 +34,13 @@ if _ROOT not in sys.path:
 from engine.league_config import CATEGORY_META, ScoringType  # noqa: E402
 
 Z_CAP = 3.0
-# Availability softening: in total mode, stats scale by games**AVAIL_ALPHA.
+# Availability softening: in availability-adjusted mode, stats scale by games**AVAIL_ALPHA.
 #   1.0 -> pure season totals (availability counts fully)
 #   0.5 -> sqrt softening (a star who misses time isn't buried) -- our default
 #   0.0 -> per-game (availability ignored)
 AVAIL_ALPHA = 0.5
-# Per-game components scaled by the availability factor when basis="total".
-SCALE_FIELDS = ("pts", "reb", "ast", "stl", "blk", "fg3m", "tov", "fga", "fta")
+# Per-game components scaled by the availability factor when basis="availability_adjusted".
+SCALE_FIELDS = ("pts", "reb", "ast", "stl", "blk", "fg3m", "tov", "fga", "fta", "fgm", "ftm", "min")
 
 
 def _mean_std(xs):
@@ -66,11 +69,15 @@ def _cat_raw(players, pool, cat):
 
 
 def _apply_basis(players, basis, avail_alpha=AVAIL_ALPHA):
-    """For basis='total', scale counting stats and attempts by games**avail_alpha."""
+    """For basis='availability_adjusted' (alias: 'total'), scale counting stats
+    and attempts by games**avail_alpha."""
     if basis == "per_game":
         return players
-    if basis != "total":
-        raise ValueError(f"basis must be 'total' or 'per_game', got {basis!r}")
+    if basis not in ("availability_adjusted", "total"):
+        raise ValueError(
+            f"basis must be 'availability_adjusted' (alias: 'total') or "
+            f"'per_game', got {basis!r}"
+        )
     out = {}
     for i, p in players.items():
         factor = (p.get("gp") or 0) ** avail_alpha
@@ -106,7 +113,7 @@ def _draft_pool_ids(scaled, config, pool_size, z_cap=Z_CAP):
     return sorted(pass1, key=pass1.get, reverse=True)[:pool_size]
 
 
-def compute_values(players, config, min_gp=20, pool_size=None, basis="total",
+def compute_values(players, config, min_gp=20, pool_size=None, basis="availability_adjusted",
                    z_cap=Z_CAP, avail_alpha=AVAIL_ALPHA):
     """Ranked board (highest value first): {rank, nba_id, name, value, vor}."""
     eligible = {i: p for i, p in players.items() if (p.get("gp") or 0) >= min_gp}
@@ -152,10 +159,12 @@ def _show_movers(base, other, label, n=8):
 def _demo():
     from ingest.nba_boxscores import get_season_boxscores, recent_completed_seasons
     from engine.league_config import standard_9cat, punt_ft_9cat
+    from util.console import configure_stdout_utf8
 
+    configure_stdout_utf8()
     season = recent_completed_seasons(1)[0]
     players, src = get_season_boxscores(season)
-    print(f"Building board on {season} ({len(players)} players, from {src}); basis=total")
+    print(f"Building board on {season} ({len(players)} players, from {src}); basis=availability_adjusted")
     std = compute_values(players, standard_9cat())
     _print_board(f"Standard 9-Cat -- {season} top 30", std)
     punt = compute_values(players, punt_ft_9cat())
@@ -164,45 +173,13 @@ def _demo():
 
 
 def _selftest():
-    from engine.league_config import standard_9cat, punt_ft_9cat, points_league
-    P = {
-        1: dict(name="giannis_like", gp=51, pts=28, reb=11, ast=6, stl=0.9, blk=0.9,
-                tov=3.2, fg3m=0.3, fg_pct=0.61, fga=18, ft_pct=0.60, fta=10),
-        2: dict(name="sharp", gp=78, pts=22, reb=4, ast=6, stl=1.4, blk=0.3,
-                tov=2.0, fg3m=3.6, fg_pct=0.47, fga=16, ft_pct=0.90, fta=5),
-        3: dict(name="allround", gp=76, pts=20, reb=7, ast=7, stl=1.2, blk=0.6,
-                tov=2.5, fg3m=2.0, fg_pct=0.50, fga=15, ft_pct=0.82, fta=6),
-        4: dict(name="wing", gp=70, pts=14, reb=5, ast=2, stl=1.0, blk=0.5,
-                tov=1.2, fg3m=1.8, fg_pct=0.46, fga=10, ft_pct=0.80, fta=3),
-        5: dict(name="fillA", gp=72, pts=10, reb=4, ast=3, stl=0.7, blk=0.3,
-                tov=1.5, fg3m=1.0, fg_pct=0.45, fga=9, ft_pct=0.78, fta=2),
-        6: dict(name="fillB", gp=66, pts=9, reb=7, ast=1, stl=0.5, blk=1.2,
-                tov=1.0, fg3m=0.2, fg_pct=0.56, fga=7, ft_pct=0.62, fta=4),
-    }
-    rank = lambda b, nm: next(r["rank"] for r in b if r["name"] == nm)
+    """Thin wrapper: runs tests/test_value.py under pytest."""
+    import pytest
 
-    capped = compute_values(P, standard_9cat(), min_gp=1, pool_size=6, z_cap=3)
-    loose = compute_values(P, standard_9cat(), min_gp=1, pool_size=6, z_cap=100)
-    assert rank(capped, "giannis_like") <= rank(loose, "giannis_like")
-
-    two = {10: dict(name="ironman", gp=80, pts=18, reb=6, ast=4, stl=1, blk=0.5, tov=2,
-                    fg3m=2, fg_pct=0.48, fga=13, ft_pct=0.8, fta=4),
-           11: dict(name="fragile", gp=40, pts=18, reb=6, ast=4, stl=1, blk=0.5, tov=2,
-                    fg3m=2, fg_pct=0.48, fga=13, ft_pct=0.8, fta=4)}
-    tot = compute_values(two, standard_9cat(), min_gp=1, pool_size=2, basis="total")
-    pg = compute_values(two, standard_9cat(), min_gp=1, pool_size=2, basis="per_game")
-    assert rank(tot, "ironman") < rank(tot, "fragile")
-    assert pg[0]["value"] == pg[1]["value"]
-
-    pl = points_league()
-    ptot = compute_values(two, pl, min_gp=1, pool_size=2, basis="total")
-    assert rank(ptot, "ironman") < rank(ptot, "fragile")
-
-    std = compute_values(P, standard_9cat(), min_gp=1, pool_size=6, basis="per_game")
-    punt = compute_values(P, punt_ft_9cat(), min_gp=1, pool_size=6, basis="per_game")
-    assert rank(punt, "giannis_like") < rank(std, "giannis_like")
-
-    print("value selftest ok: cap bounds outliers, total rewards availability, points+punt work")
+    rc = pytest.main(["-q", os.path.join(_ROOT, "tests", "test_value.py")])
+    if rc != 0:
+        raise SystemExit(rc)
+    print("value selftest ok: see tests/test_value.py")
 
 
 if __name__ == "__main__":

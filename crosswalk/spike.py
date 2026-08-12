@@ -175,22 +175,14 @@ def run() -> None:
 
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
-        # Offline check of the matching logic -- no network, no nba_api needed.
-        cases = {
-            "Luka Dončić": "lukadoncic",
-            "Karl-Anthony Towns": "karlanthonytowns",
-            "Jaren Jackson Jr.": "jarenjackson",
-            "De'Aaron Fox": "deaaronfox",
-            "P.J. Washington": "pjwashington",
-            "Nikola Jokić": "nikolajokic",
-            "Bogdan Bogdanović": "bogdanbogdanovic",
-            "Bojan Bogdanović": "bojanbogdanovic",
-        }
-        for raw, expected in cases.items():
-            got = normalize_name(raw)
-            assert got == expected, f"{raw!r} -> {got!r}, expected {expected!r}"
-        # The near-duplicate pair must stay distinct.
-        assert normalize_name("Bogdan Bogdanović") != normalize_name("Bojan Bogdanović")
-        print(f"selftest ok: {len(cases)} names normalized as expected")
+        # Thin wrapper: runs tests/test_crosswalk.py under pytest (no network,
+        # no nba_api needed -- pure name-normalization checks).
+        import pytest
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        rc = pytest.main(["-q", os.path.join(root, "tests", "test_crosswalk.py")])
+        if rc != 0:
+            raise SystemExit(rc)
+        print("selftest ok: see tests/test_crosswalk.py")
     else:
         run()

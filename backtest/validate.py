@@ -76,6 +76,24 @@ def _values_by_id(board: list[dict]) -> dict:
     return {r["nba_id"]: r["value"] for r in board}
 
 
+def _score_predictors(actual: dict, baseline: dict, ours_off: dict, ours_on: dict):
+    """Score three predictors against `actual` on ONE common population.
+
+    Previously each predictor's Spearman correlation was computed against its
+    own intersection with `actual` (see the old per-predictor corr() closure),
+    so baseline/off/on were each measured on a DIFFERENT population before
+    being diffed against each other -- an apples-to-oranges bug. This computes
+    the intersection across all four inputs up front and scores every
+    predictor on exactly that population, returning (base_c, off_c, on_c, n).
+    """
+    common = sorted(set(actual) & set(baseline) & set(ours_off) & set(ours_on))
+    act = [actual[i] for i in common]
+    base_c = spearman([baseline[i] for i in common], act)
+    off_c = spearman([ours_off[i] for i in common], act)
+    on_c = spearman([ours_on[i] for i in common], act)
+    return base_c, off_c, on_c, len(common)
+
+
 def run_backtest(target_season: str | None = None, min_gp: int = 20) -> None:
     from ingest.nba_boxscores import get_season_boxscores, recent_completed_seasons
     from engine.projection import project_players, ROLE_DAMP
@@ -105,13 +123,7 @@ def run_backtest(target_season: str | None = None, min_gp: int = 20) -> None:
     # Baseline: last season's actual value, used as-is to predict this season.
     baseline = _values_by_id(compute_values(get_season_boxscores(priors[0])[0], cfg, min_gp=min_gp))
 
-    def corr(pred: dict):
-        common = [i for i in pred if i in actual]
-        return spearman([pred[i] for i in common], [actual[i] for i in common]), len(common)
-
-    base_c, _ = corr(baseline)
-    off_c, _ = corr(ours_off)
-    on_c, n = corr(ours_on)
+    base_c, off_c, on_c, n = _score_predictors(actual, baseline, ours_off, ours_on)
 
     actual_top30 = {r["nba_id"] for r in actual_board[:30]}
     hits = sum(1 for r in proj_on[:30] if r["nba_id"] in actual_top30)
@@ -139,18 +151,20 @@ def run_backtest(target_season: str | None = None, min_gp: int = 20) -> None:
 
 
 def _selftest() -> None:
-    assert abs(spearman([1, 2, 3, 4, 5], [1, 2, 3, 4, 5]) - 1.0) < 1e-9   # perfect
-    assert abs(spearman([1, 2, 3, 4, 5], [5, 4, 3, 2, 1]) + 1.0) < 1e-9   # inverse
-    assert _rankdata([10, 10, 20]) == [1.5, 1.5, 3.0]                     # ties average
-    assert prior_seasons("2025-26", 3) == ["2024-25", "2023-24", "2022-23"]
-    s = spearman([1, 2, 3, 4, 5], [1, 2, 3, 5, 4])
-    assert 0.0 < s < 1.0, s
-    print("validate selftest ok: spearman (perfect/inverse/partial), tie handling, season math")
+    """Thin wrapper: runs tests/test_validate.py under pytest."""
+    import pytest
+
+    rc = pytest.main(["-q", os.path.join(_ROOT, "tests", "test_validate.py")])
+    if rc != 0:
+        raise SystemExit(rc)
+    print("validate selftest ok: see tests/test_validate.py")
 
 
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         _selftest()
     else:
+        from util.console import configure_stdout_utf8
+        configure_stdout_utf8()
         seasons = [a for a in sys.argv[1:] if not a.startswith("-")]
         run_backtest(seasons[0] if seasons else None)

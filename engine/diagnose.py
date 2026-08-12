@@ -11,7 +11,7 @@ from engine.value import (
 from engine.league_config import CATEGORY_META, ScoringType
 
 
-def explain(players, config, target_name, min_gp=20, pool_size=None, basis="total",
+def explain(players, config, target_name, min_gp=20, pool_size=None, basis="availability_adjusted",
             z_cap=Z_CAP, avail_alpha=AVAIL_ALPHA):
     eligible = {i: p for i, p in players.items() if (p.get("gp") or 0) >= min_gp}
     if not eligible:
@@ -83,31 +83,18 @@ def explain(players, config, target_name, min_gp=20, pool_size=None, basis="tota
         print("  carried by:", ", ".join(carried))
     if dragged:
         print("  dragged by:", ", ".join(dragged))
-    print("  (* = category hit the cap; z reflects season-total value, availability included)")
+    print("  (* = category hit the cap; z reflects availability-adjusted value)")
     return rank, total
 
 
 def _selftest():
-    from engine.league_config import standard_9cat
-    P = {
-        1: dict(name="giannis_like", gp=51, pts=28, reb=11, ast=6, stl=0.9, blk=0.9,
-                tov=3.2, fg3m=0.3, fg_pct=0.61, fga=18, ft_pct=0.60, fta=10),
-        2: dict(name="sharp", gp=78, pts=22, reb=4, ast=6, stl=1.4, blk=0.3,
-                tov=2.0, fg3m=3.6, fg_pct=0.47, fga=16, ft_pct=0.90, fta=5),
-        3: dict(name="allround", gp=76, pts=20, reb=7, ast=7, stl=1.2, blk=0.6,
-                tov=2.5, fg3m=2.0, fg_pct=0.50, fga=15, ft_pct=0.82, fta=6),
-        4: dict(name="wing", gp=70, pts=14, reb=5, ast=2, stl=1.0, blk=0.5,
-                tov=1.2, fg3m=1.8, fg_pct=0.46, fga=10, ft_pct=0.80, fta=3),
-        5: dict(name="fillA", gp=72, pts=10, reb=4, ast=3, stl=0.7, blk=0.3,
-                tov=1.5, fg3m=1.0, fg_pct=0.45, fga=9, ft_pct=0.78, fta=2),
-        6: dict(name="fillB", gp=66, pts=9, reb=7, ast=1, stl=0.5, blk=1.2,
-                tov=1.0, fg3m=0.2, fg_pct=0.56, fga=7, ft_pct=0.62, fta=4),
-    }
-    rank, total = explain(P, standard_9cat(), "allround", min_gp=1, pool_size=6)
-    board = compute_values(P, standard_9cat(), min_gp=1, pool_size=6)
-    board_value = next(r["value"] for r in board if r["name"] == "allround")
-    assert abs(total - board_value) < 0.02, (total, board_value)
-    print(f"\ndiagnose selftest ok: contributions sum to board value ({total:.2f} == {board_value})")
+    """Thin wrapper: runs tests/test_diagnose.py under pytest."""
+    import pytest
+
+    rc = pytest.main(["-q", os.path.join(_ROOT, "tests", "test_diagnose.py")])
+    if rc != 0:
+        raise SystemExit(rc)
+    print("diagnose selftest ok: see tests/test_diagnose.py")
 
 
 if __name__ == "__main__":
@@ -118,6 +105,8 @@ if __name__ == "__main__":
         from ingest.nba_boxscores import get_season_boxscores, recent_completed_seasons
         from engine.projection import project_players
         from engine.league_config import standard_9cat
+        from util.console import configure_stdout_utf8
+        configure_stdout_utf8()
         name = " ".join(a for a in sys.argv[1:] if not a.startswith("-")).strip() or "Jamal Murray"
         seasons = recent_completed_seasons(3)
         lines = [get_season_boxscores(s)[0] for s in seasons]
