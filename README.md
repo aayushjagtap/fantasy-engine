@@ -96,6 +96,35 @@ under pytest, kept as a convenience shortcut for sanity-checking one module
 without typing the full `pytest` path. pytest must be installed (it's in
 `requirements.txt`) for `--selftest` to work.
 
+## Defining a league as a file
+
+`LeagueConfig` no longer has to be constructed in Python. `leagues/` has five
+worked examples to copy and edit -- a standard 9-cat league, two punt builds
+(`punt_ft.json`, `punt_ast_fg.json`), an 8-cat roto league, and a points
+league (`points_espn.json`) that scores makes/attempts directly (FGM/FGA/
+FTM/FTA), not just a flat points-per-stat total.
+
+```python
+from engine.league_config import LeagueConfig
+
+cfg = LeagueConfig.load("leagues/punt_ft.json")
+```
+
+`load()` also accepts `.yaml`/`.yml` if `pyyaml` is installed (it's optional --
+not in `requirements.txt` -- and loading a YAML file without it fails with a
+message telling you to `pip install pyyaml`). A config round-trips back out
+with `cfg.to_json(path)` or `cfg.save(path)` (format chosen by extension).
+
+The Python constructors (`standard_9cat()`, `punt_ft_9cat()`,
+`points_league()`) still exist and are used as test fixtures, but a new
+league no longer requires editing engine code -- copy the closest file in
+`leagues/` and edit it.
+
+These files demonstrate config *shape*, not recommended strategy --
+`punt_ast_fg.json` in particular is a deliberately uncommon combination
+(punting two categories plus non-default category weights) chosen to
+exercise those knobs, not a build to copy blindly into a real draft.
+
 ## Tests
 
 ```

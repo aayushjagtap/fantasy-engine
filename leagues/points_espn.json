@@ -1,0 +1,26 @@
+{
+  "name": "ESPN-Style Points",
+  "scoring_type": "points",
+  "num_teams": 10,
+  "point_values": {
+    "fgm": 2.0,
+    "fga": -1.0,
+    "fg3m": 1.0,
+    "ftm": 1.0,
+    "fta": -1.0,
+    "reb": 1.0,
+    "ast": 2.0,
+    "stl": 4.0,
+    "blk": 4.0,
+    "tov": -2.0
+  },
+  "roster": [
+    {"position": "PG", "count": 1},
+    {"position": "SG", "count": 1},
+    {"position": "SF", "count": 1},
+    {"position": "PF", "count": 1},
+    {"position": "C", "count": 1},
+    {"position": "UTIL", "count": 3},
+    {"position": "BENCH", "count": 3}
+  ]
+}

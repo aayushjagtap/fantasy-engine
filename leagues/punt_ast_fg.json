@@ -1,0 +1,27 @@
+{
+  "name": "9-Cat, Punt AST + FG% (volume gunner build)",
+  "scoring_type": "category",
+  "num_teams": 12,
+  "categories": {
+    "pts": {},
+    "reb": {},
+    "ast": {"is_punt": true},
+    "stl": {"weight": 1.2},
+    "blk": {"weight": 1.2},
+    "fg3m": {},
+    "tov": {},
+    "fg_pct": {"is_punt": true},
+    "ft_pct": {}
+  },
+  "roster": [
+    {"position": "PG", "count": 1},
+    {"position": "SG", "count": 1},
+    {"position": "SF", "count": 1},
+    {"position": "PF", "count": 1},
+    {"position": "C", "count": 1},
+    {"position": "G", "count": 1},
+    {"position": "F", "count": 1},
+    {"position": "UTIL", "count": 2},
+    {"position": "BENCH", "count": 3}
+  ]
+}

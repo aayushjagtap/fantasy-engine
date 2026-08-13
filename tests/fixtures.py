@@ -20,6 +20,17 @@ SIX_PLAYER_FIXTURE: dict[int, dict] = {
             tov=1.0, fg3m=0.2, fg_pct=0.56, fga=7, ft_pct=0.62, fta=4),
 }
 
+# Two otherwise-identical players differing only in games played -- isolates
+# the availability-adjustment effect (SCALE_FIELDS) from everything else.
+# compute_values()/_apply_basis() never mutate their input, so this dict is
+# safe to share across multiple tests.
+IRONMAN_FRAGILE_FIXTURE: dict[int, dict] = {
+    10: dict(name="ironman", gp=80, pts=18, reb=6, ast=4, stl=1, blk=0.5, tov=2,
+             fg3m=2, fg_pct=0.48, fga=13, ft_pct=0.8, fta=4),
+    11: dict(name="fragile", gp=40, pts=18, reb=6, ast=4, stl=1, blk=0.5, tov=2,
+             fg3m=2, fg_pct=0.48, fga=13, ft_pct=0.8, fta=4),
+}
+
 
 def rank_of(board: list[dict], name: str) -> int:
     """Helper matching the `rank = lambda b, nm: ...` pattern used in the old selftests."""

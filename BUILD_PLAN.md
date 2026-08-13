@@ -1,8 +1,7 @@
 # BUILD_PLAN.md — path from current state to a usable 2026-27 draft tool
 
 Written 2026-08-11. Companion to `SCOPE.md` (which defines *what* v1 is).
-This file defines *what to build next and in what order*. Claude Code should
-read this and `SCOPE.md` before making changes.
+This file defines *what to build next and in what order*. 
 
 ---
 
@@ -251,12 +250,5 @@ relative to the league. Then:
 
 ---
 
-## Working agreement for Claude Code
 
-- The engine stays surface-agnostic. Nothing in `engine/` may import from `cli/`.
-- Every new module ships with tests in `tests/`, runnable offline.
-- No network calls in tests or CI — the committed cache is the data source.
-- Config drives behavior. If a change requires editing engine code to support a
-  new league type, it's the wrong change.
-- Manual override maps are a feature, not a smell. Prefer a small hand-edited
-  file over clever inference for the long tail.
+Idea (post-C1): decouple signal windows from the averaging window. The 3-season limit is right for the box-score average (proven by sweep) but arbitrary for slow-moving traits. Let expected_gp read all 5 cached seasons for a better durability estimate, and consider usage% (needs an advanced-measure ingest call) as a role signal over a longer window.

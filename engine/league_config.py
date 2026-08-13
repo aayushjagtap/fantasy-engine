@@ -16,7 +16,9 @@ A future TypeScript / extension consumer can get a language-agnostic contract vi
 
 from __future__ import annotations
 
+import json
 from enum import Enum
+from pathlib import Path
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -90,6 +92,19 @@ class RosterSlot(BaseModel):
     count: int = Field(ge=0)
 
 
+def _require_yaml():
+    """YAML support is optional -- .json configs need no extra dependency."""
+    try:
+        import yaml
+    except ImportError as e:
+        raise ImportError(
+            "Reading/writing a .yaml or .yml league config requires PyYAML "
+            "(pip install pyyaml). YAML support is optional -- .json league "
+            "configs work with no extra dependency."
+        ) from e
+    return yaml
+
+
 class LeagueConfig(BaseModel):
     """The full league contract. Everything downstream reads from this."""
 
@@ -132,6 +147,52 @@ class LeagueConfig(BaseModel):
     @property
     def punted_categories(self) -> list[StatCategory]:
         return [c for c, s in self.categories.items() if s.is_punt]
+
+    @classmethod
+    def load(cls, path: str | Path) -> "LeagueConfig":
+        """Load and validate a league config from a .json, .yaml, or .yml file.
+
+        Supporting a new league means writing a file here, not editing engine
+        code -- see leagues/ for worked examples to copy and edit.
+        """
+        path = Path(path)
+        suffix = path.suffix.lower()
+        if suffix not in (".json", ".yaml", ".yml"):
+            raise ValueError(
+                f"Unsupported league config extension {suffix!r} for {path} "
+                "-- use .json, .yaml, or .yml"
+            )
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError as e:
+            raise FileNotFoundError(
+                f"No league config at {path} -- see leagues/ for worked "
+                "examples to copy and edit."
+            ) from e
+        data = json.loads(text) if suffix == ".json" else _require_yaml().safe_load(text)
+        return cls.model_validate(data)
+
+    def to_json(self, path: str | Path | None = None, *, indent: int = 2) -> str:
+        """Serialize to a JSON string, optionally writing it to `path`."""
+        text = self.model_dump_json(indent=indent)
+        if path is not None:
+            Path(path).write_text(text, encoding="utf-8")
+        return text
+
+    def save(self, path: str | Path) -> None:
+        """Save to `path`; format is chosen by extension (.json, .yaml, .yml)."""
+        path = Path(path)
+        suffix = path.suffix.lower()
+        if suffix == ".json":
+            self.to_json(path)
+        elif suffix in (".yaml", ".yml"):
+            data = self.model_dump(mode="json")
+            path.write_text(_require_yaml().safe_dump(data, sort_keys=False), encoding="utf-8")
+        else:
+            raise ValueError(
+                f"Unsupported league config extension {suffix!r} for {path} "
+                "-- use .json, .yaml, or .yml"
+            )
 
 
 # --------------------------------------------------------------------------- #

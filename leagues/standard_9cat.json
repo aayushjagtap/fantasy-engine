@@ -1,0 +1,27 @@
+{
+  "name": "Standard 9-Cat",
+  "scoring_type": "category",
+  "num_teams": 12,
+  "categories": {
+    "pts": {},
+    "reb": {},
+    "ast": {},
+    "stl": {},
+    "blk": {},
+    "fg3m": {},
+    "tov": {},
+    "fg_pct": {},
+    "ft_pct": {}
+  },
+  "roster": [
+    {"position": "PG", "count": 1},
+    {"position": "SG", "count": 1},
+    {"position": "SF", "count": 1},
+    {"position": "PF", "count": 1},
+    {"position": "C", "count": 1},
+    {"position": "G", "count": 1},
+    {"position": "F", "count": 1},
+    {"position": "UTIL", "count": 2},
+    {"position": "BENCH", "count": 3}
+  ]
+}
