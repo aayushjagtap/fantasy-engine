@@ -4,3 +4,4 @@ data/*
 !data/cache/
 *.pyc
 scratch_*.py
+out/

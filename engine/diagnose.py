@@ -9,6 +9,7 @@ from engine.value import (
     Z_CAP, AVAIL_ALPHA,
 )
 from engine.league_config import CATEGORY_META, ScoringType
+from crosswalk.spike import normalize_name
 
 
 def explain(players, config, target_name, min_gp=20, pool_size=None, basis="availability_adjusted",
@@ -22,11 +23,19 @@ def explain(players, config, target_name, min_gp=20, pool_size=None, basis="avai
         pool_size = config.num_teams * total_roster
     pool_size = max(1, min(pool_size, len(eligible)))
 
+    # Exact match is accent/case-insensitive via normalize_name, so "Luka Doncic",
+    # "luka doncic", and "Luka Dončić" all resolve to the same player.
+    target_key = normalize_name(target_name)
     tid = next((i for i, p in eligible.items()
-                if (p.get("name") or "").lower() == target_name.lower()), None)
+                if normalize_name(p.get("name") or "") == target_key), None)
     if tid is None:
-        last = target_name.split()[-1].lower()
-        near = [p.get("name") for p in eligible.values() if last in (p.get("name") or "").lower()]
+        # "did you mean" suggestions: full normalized query as a substring first
+        # (precise, still accent-insensitive), falling back to just the last
+        # token (surname) so old partial-query behavior keeps working.
+        last_key = normalize_name(target_name.split()[-1]) if target_name.split() else ""
+        near = [p.get("name") for p in eligible.values()
+                if (target_key and target_key in normalize_name(p.get("name") or ""))
+                or (last_key and last_key in normalize_name(p.get("name") or ""))]
         print(f"'{target_name}' not found among {len(eligible)} eligible (>= {min_gp} GP).")
         if near:
             print("  did you mean:", ", ".join(near[:6]))
@@ -37,6 +46,9 @@ def explain(players, config, target_name, min_gp=20, pool_size=None, basis="avai
     rank = next((r["rank"] for r in board if r["nba_id"] == tid), None)
     p = eligible[tid]
     print(f"\n{p.get('name')}  (proj age {p.get('age')}, {round(p.get('gp') or 0)} GP)  ->  rank #{rank}")
+    if p.get("role_mult") is not None:
+        trend = "expanding role" if p["role_mult"] > 1 else "shrinking role" if p["role_mult"] < 1 else "flat role"
+        print(f"  role trend multiplier: {p['role_mult']:.3f}  ({trend}, from minutes trajectory)")
 
     if config.scoring_type is ScoringType.POINTS:
         print(f"{'stat':<8} {'per-game':>9} {'points':>9}")

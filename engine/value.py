@@ -147,11 +147,20 @@ def _print_board(title, board, n=30):
         print(f"{row['rank']:>3}  {(row['name'] or '?'):<26} {row['value']:>7} {row['vor']:>7}")
 
 
-def _show_movers(base, other, label, n=8):
+def _rank_movers(base, other):
+    """(delta, name, was_rank, now_rank) for players in both boards.
+
+    delta = base_rank - other_rank: positive means the player moved UP
+    (better/lower rank number) under `other` relative to `base`.
+    """
     base_rank = {r["nba_id"]: r["rank"] for r in base}
+    return [(base_rank[r["nba_id"]] - r["rank"], r["name"], base_rank[r["nba_id"]], r["rank"])
+            for r in other if r["nba_id"] in base_rank]
+
+
+def _show_movers(base, other, label, n=8):
     print(f"\nBiggest risers under {label} (rank change):")
-    movers = [(base_rank[r["nba_id"]] - r["rank"], r["name"], base_rank[r["nba_id"]], r["rank"])
-              for r in other if r["nba_id"] in base_rank]
+    movers = _rank_movers(base, other)
     for delta, name, was, now in sorted(movers, reverse=True)[:n]:
         print(f"   {(name or '?'):<26} {was:>3} -> {now:<3}  (+{delta})")
 
