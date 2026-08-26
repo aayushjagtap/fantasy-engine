@@ -81,6 +81,12 @@ python engine/projection.py
 # Per-category explanation for one player (why are they ranked where they are).
 python engine/diagnose.py "Jamal Murray"
 
+# Projection-divergence report: players whose season-to-date production diverges
+# from their projected line, with a per-category why. NOT a hot/cold signal --
+# on season totals this is projection error, not proven regression (the tool
+# says so in its output). Demo runs 2025-26 as a simulated in-season season.
+python engine/divergence.py
+
 # Backtest: projects a held-out season and checks the projection's ranking
 # against what actually happened (Spearman rank correlation vs. a naive
 # "repeat last season" baseline).
@@ -156,6 +162,31 @@ board so they're never silent.
   # who changed teams for 2026-27, ranked by projected value -- the shortlist:
   python -m cli.board --role-audit --league leagues/standard_9cat.json
   ```
+
+## Projection-divergence report (`--divergence`)
+
+```
+python -m cli.board --divergence --league leagues/standard_9cat.json --csv out/divergence.csv
+```
+
+Ranks the projected line and the season-to-date production line for every
+player, and flags where the two disagree materially -- reported as rank delta
+("projected #24, producing like #4") plus a per-category why reused from
+`--explain`'s machinery. Per-game basis; sample size is handled by a
+reliability weight (`games / (games + 25)`); only players projected inside the
+draft pool are eligible.
+
+**This is a projection-divergence report, not a buy-low/sell-high oracle.** On
+season totals, a divergence is projection error -- it cannot separate a streak
+that will regress from a projection that was simply wrong about a player's
+role or talent. The flagged lists overlap the backtest's "breakouts we missed"
+and "busts" by construction. Read a row as "look closer here." A true in-season
+signal needs per-game game-log ingest (recent-form vs season-form), which
+doesn't exist until the 2026-27 season is underway -- see `BUILD_PLAN.md`.
+
+With no 2026-27 data yet, the demo (`python engine/divergence.py`) runs 2025-26
+as a simulated in-season season: projected from its three prior seasons, versus
+2025-26 actuals.
 
 ## Tests
 

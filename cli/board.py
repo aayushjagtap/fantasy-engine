@@ -29,6 +29,7 @@ from pathlib import Path
 import pydantic
 
 from engine.diagnose import explain
+from engine.divergence import CAVEAT, DEFAULT_THRESHOLD, projection_divergence
 from engine.league_config import LeagueConfig, standard_9cat
 from engine.value import REPLACEMENT_MODES, _rank_movers, compute_values
 
@@ -51,6 +52,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--role-audit", action="store_true",
                    help="report players who changed teams for the upcoming season, ranked by projected "
                         "value -- the candidate list for data/role_overrides.json (--league optional)")
+    p.add_argument("--divergence", action="store_true",
+                   help="report players whose season-to-date production diverges materially from their "
+                        "projected line, with a per-category why (--league optional). NOT a hot/cold "
+                        "signal -- see the output header. Always per-game basis.")
+    p.add_argument("--divergence-threshold", type=float, default=DEFAULT_THRESHOLD, metavar="X",
+                   help=f"min |reliability-weighted divergence| to flag (default {DEFAULT_THRESHOLD}); "
+                        "--divergence only")
     p.add_argument("--season", help="season anchoring the 3-season projection window (default: latest 3 completed)")
     p.add_argument("--actuals", action="store_true", help="use one season's raw box scores instead of projecting")
     return p
@@ -107,6 +115,29 @@ def _load_players(args: argparse.Namespace) -> tuple[dict, str]:
     return projected, f"projected {upcoming} from {', '.join(seasons)}"
 
 
+def _load_divergence_players(args: argparse.Namespace) -> tuple[dict, dict, str]:
+    """(projected, actual, description) for --divergence: the projected line for a
+    target season vs that season's real box scores. Target defaults to the latest
+    completed season; the projection uses the three seasons before it, the same
+    window backtest/validate.py uses. No rookies=/role_overrides= merge -- the
+    target season here is historical (that's all the cache holds), and a future
+    draft class / offseason override says nothing about a past season."""
+    from ingest.nba_boxscores import get_season_boxscores, recent_completed_seasons
+    from ingest.nba_rosters import attach_positions, load_rosters_or_warn
+    from engine.projection import project_players
+
+    target = args.season or recent_completed_seasons(1)[0]
+    y = int(target.split("-")[0])
+    priors = [f"{yr}-{str(yr + 1)[2:]}" for yr in range(y - 1, y - 4, -1)]
+
+    rosters = load_rosters_or_warn()
+    actual = attach_positions(get_season_boxscores(target)[0], rosters=rosters)
+    prior_lines = [get_season_boxscores(s)[0] for s in priors]
+    prior_lines[0] = attach_positions(prior_lines[0], rosters=rosters)
+    projected, _aged = project_players(prior_lines)
+    return projected, actual, f"projected {target} from {', '.join(priors)}, vs {target} actuals"
+
+
 def _board_rows(players: dict, cfg: LeagueConfig, basis: str, replacement_mode: str = "flat") -> list[dict]:
     """Full ranked board (not sliced to --top). Both lenses always computed;
     `basis` picks which is primary (sort order, value/vor), but
@@ -156,10 +187,10 @@ def _print_table(rows: list[dict], league_name: str, description: str, basis: st
         print("  (R) = 2026 draft class, hand-entered line from data/rookies_2026.json")
 
 
-def _write_csv(path: str, rows: list[dict]) -> None:
+def _write_csv(path: str, rows: list[dict], fields: tuple | list = _CSV_FIELDS) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=_CSV_FIELDS)
+        writer = csv.DictWriter(f, fieldnames=list(fields))
         writer.writeheader()
         writer.writerows(rows)
 
@@ -225,6 +256,58 @@ def cmd_role_audit(args: argparse.Namespace, players: dict) -> int:
     return 0
 
 
+def _divergence_csv(rows: list[dict], cat_keys: list[str]) -> tuple[list[dict], list[str]]:
+    """Flatten projection_divergence() rows for CSV: cat_deltas -> dz_<stat>
+    columns, reasons -> a single ' | '-joined string."""
+    flat_fields = ["direction", "name", "nba_id", "position", "projected_rank",
+                   "actual_rank", "rank_delta", "gp", "value_delta", "weighted_delta",
+                   "reliability", "reasons"]
+    fields = flat_fields + [f"dz_{k}" for k in cat_keys]
+    out = []
+    for r in rows:
+        flat = {k: r[k] for k in flat_fields if k != "reasons"}
+        flat["reasons"] = " | ".join(r["reasons"])
+        for k in cat_keys:
+            flat[f"dz_{k}"] = r["cat_deltas"].get(k, "")
+        out.append(flat)
+    return out, fields
+
+
+def cmd_divergence(args: argparse.Namespace, projected: dict, actual: dict, description: str) -> int:
+    cfg = LeagueConfig.load(args.league) if args.league else standard_9cat()
+    rows = projection_divergence(projected, actual, cfg, threshold=args.divergence_threshold)
+    over = [r for r in rows if r["direction"] == "over"]
+    under = [r for r in rows if r["direction"] == "under"]
+
+    pool = cfg.num_teams * sum(s.count for s in cfg.roster)
+    print(f"\n{cfg.name} -- projection-divergence report  ({description})")
+    print(f"basis=per_game  threshold={args.divergence_threshold}  draft pool={pool}")
+    print(f"\n!! {CAVEAT}\n")
+
+    def _section(title: str, rs: list[dict]) -> None:
+        print(f"{title}  ({len(rs)})")
+        if not rs:
+            print("  (none)\n")
+            return
+        print(f"{'player':<26} {'pos':>4} {'proj#':>6} {'prod#':>6} {'d':>5} {'gp':>3}  why")
+        print("-" * 100)
+        for r in rs:
+            print(f"{(r['name'] or '?'):<26} {r['position']:>4} {r['projected_rank']:>6} "
+                  f"{r['actual_rank']:>6} {r['rank_delta']:>+5} {r['gp']:>3}  "
+                  f"{' | '.join(r['reasons'])}")
+        print()
+
+    _section("PRODUCING ABOVE PROJECTION  (sell-high candidates IF this is a streak, not a miss)", over)
+    _section("PRODUCING BELOW PROJECTION  (buy-low candidates IF this is a slump, not a miss)", under)
+
+    if args.csv:
+        cat_keys = [c.value for c in cfg.active_categories]
+        flat, fields = _divergence_csv(rows, cat_keys)
+        _write_csv(args.csv, flat, fields)
+        print(f"Wrote {len(flat)} rows to {args.csv}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     from util.console import configure_stdout_utf8
 
@@ -232,14 +315,20 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     args.basis = _normalize_basis(args.basis)
 
-    if sum(bool(x) for x in (args.explain, args.compare, args.role_audit)) > 1:
-        print("Error: --explain, --compare and --role-audit are mutually exclusive", file=sys.stderr)
+    if sum(bool(x) for x in (args.explain, args.compare, args.role_audit, args.divergence)) > 1:
+        print("Error: --explain, --compare, --role-audit and --divergence are mutually exclusive",
+              file=sys.stderr)
         return 1
-    if not args.league and not args.compare and not args.role_audit:
-        print("Error: --league is required unless --compare or --role-audit is given", file=sys.stderr)
+    if not args.league and not args.compare and not args.role_audit and not args.divergence:
+        print("Error: --league is required unless --compare, --role-audit or --divergence is given",
+              file=sys.stderr)
         return 1
 
     try:
+        if args.divergence:
+            projected, actual, description = _load_divergence_players(args)
+            return cmd_divergence(args, projected, actual, description)
+
         players, description = _load_players(args)
 
         if args.compare:

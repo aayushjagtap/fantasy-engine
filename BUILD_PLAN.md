@@ -7,7 +7,7 @@ This file defines *what to build next and in what order*.
 
 ## Current state
 
-Updated 2026-08-25. Suite: `pytest -q` → 122 passing, fully offline.
+Updated 2026-08-25. Suite: `pytest -q` → 141 passing, fully offline.
 
 | Milestone | Status |
 |---|---|
@@ -17,8 +17,8 @@ Updated 2026-08-25. Suite: `pytest -q` → 122 passing, fully offline.
 | M2 config | Done. Constructors kept as fixtures; leagues are files now — B1. |
 | M3 value engine | Done (`engine/value.py`) + `engine/diagnose.py`. `SCALE_FIELDS` bug fixed — A3. |
 | Projection | Done (`engine/projection.py`). Recency-weighted, age-curved, role-trend. |
-| M4 draft board CLI | Done (`cli/board.py`) — B2. Dual-lens board, `--explain`, `--compare`, `--role-audit`, CSV. |
-| M5 buy-low / sell-high | **Not started.** In-season feature; needs 2026-27 data. |
+| M4 draft board CLI | Done (`cli/board.py`) — B2. Dual-lens board, `--explain`, `--compare`, `--role-audit`, `--divergence`, CSV. |
+| M5 buy-low / sell-high | **Partial — shipped as a projection-divergence report** (`engine/divergence.py`, `cli/board.py --divergence`). True in-season hot/cold is blocked on game-log ingest; see "M5" under Phase D. |
 | M6 backtest | Done (`backtest/validate.py`). Single-population fix + role-trend ablation — A4. |
 
 | Phase B/C item | Status |
@@ -36,8 +36,9 @@ Updated 2026-08-25. Suite: `pytest -q` → 122 passing, fully offline.
 | C4 role overrides | Done. `data/role_overrides.json`, applied after `_role_trend_mult`, shown in `--explain`. |
 | C5 crosswalk override map | Done. `crosswalk/overrides.json` (ships empty) + `load_overrides()`/`resolve()`; `names.py` no longer a spike. |
 
-Still deferred (out of scope this pass): M5, Phase D (`engine/team.py`, trade
-analyzer, draft assistant), the Sleeper/ADP stretch.
+Still deferred (out of scope this pass): the rest of M5 (game-log ingest —
+see Phase D), Phase D proper (`engine/team.py`, trade analyzer, draft
+assistant), the Sleeper/ADP stretch.
 
 ---
 
@@ -237,13 +238,55 @@ missing object — a roster's current per-category standing — and that object 
 the genuinely differentiated part. Cost: M5 slips, and `SCOPE.md` calls M5 the
 differentiator.
 
-### D1. M5 — buy-low / sell-high
-Divergence between current-season production and the projected line. Report in
-units a user understands (rank delta, or per-category z delta), and reuse
-`diagnose.py`'s per-category machinery to explain *why* a player is flagged.
-Note: this is an in-season feature and needs current-season data, which won't
-exist until after Oct 20, 2026. Build it against 2025-26 as a simulated
-"in-season" dataset so it can be tested now.
+### M5 — buy-low / sell-high  (partial: 2026-08-25)
+
+**Shipped this pass — a projection-divergence report.** `engine/divergence.py`
+(`projection_divergence()`) + `cli/board.py --divergence` + CSV. For every
+player it ranks the projected line and the current-production line within one
+common population, reports the gap in units a user reads directly ("projected
+#24, producing like #4"), and reuses `engine/diagnose.py`'s per-category
+machinery — factored out into `category_contributions()` — to say *why*
+("FG_PCT 0.561 vs proj 0.513 (+0.048) on 18.2 FGA"). Comparison is on the
+per-game basis (rate, not accumulation); sample size is handled separately by
+a reliability weight `gp / (gp + 25)` applied before the flag threshold; only
+players projected inside the draft pool are eligible (a deep-pool divergence
+is projection churn, not a roster call). Tested against 2025-26 as a simulated
+in-season season: project 2025-26 from its three prior seasons (as the
+backtest does), treat 2025-26 actuals as "current production."
+
+**What it is NOT, and why the rest of M5 is deferred.** A season-total
+divergence is *projection error*. It cannot separate "producing above true
+talent, will regress" (a real sell-high) from "the projection was simply
+wrong about role/health/talent" (nothing to regress to). The two are the same
+number here. By construction the flagged players overlap heavily with the
+backtest's "breakouts we missed" / "busts" lists (`backtest/validate.py`) —
+those are the projection's known blind spots, surfaced from the other side.
+The report says this in its docstring and in the CLI output header; it is
+framed as "look closer here," not as a trade signal.
+
+**What true in-season M5 needs — a real ingest addition, once the season is
+underway:** per-game game logs, so a player's *recent-N-games* form can be
+measured against their *season-to-date* form. That is the only way to tell a
+shooting hot streak (will regress) from a sustained role change (won't).
+Concretely:
+- `nba_api` `PlayerGameLog` (per-player, per-game rows), or
+- `LeagueDashPlayerStats` with `DateFrom` / `DateTo` — two whole-league pulls
+  (last ~15 days, and season-to-date) differenced.
+Same pull-locally-then-commit-cache workflow as `ingest/nba_boxscores.py`
+(datacenter-IP block still applies). Then `divergence` compares recent-form
+value vs season-form value instead of actual-vs-projected, and the reliability
+weight keys off games-in-window. No data for this exists until after Oct 20,
+2026 (2026-27 opening night).
+
+**SCOPE.md gate 3 directional check — not answerable with the current cache.**
+"Share of sell-high flags whose rest-of-season production fell toward their
+projection" needs a season split into "through game N" / "games N+1..82".
+`data/cache/` holds season totals only, so this check cannot be run — and was
+not faked. It unblocks with the same game-log ingest above. A weaker
+season-to-season reversion proxy (does a season-X divergence shrink in season
+X+1) is computable from the cache but was deliberately not shipped as
+"validation": it still can't isolate regression from projection-miss, so
+presenting it as a gate-3 result would overclaim.
 
 ### E1. `engine/team.py` — roster state
 A `Team` object holding drafted players and exposing per-category standing
@@ -317,8 +360,12 @@ deltas are apples-to-oranges. Trust the table above, not those messages.
    amend the gate — see `SCOPE.md`'s gate-3 status line. Unresolved.
 2. **Backtest holdout**: defaults to the latest completed season (2025-26).
    Fine for now; revisit once 2026-27 actuals exist.
-3. **Route decision**: D-first or E-first for Phase D (see above). Unresolved —
-   out of scope until M5 work starts.
+3. **Route decision**: D-first or E-first for Phase D. M5's ranked-list half
+   (the projection-divergence report) shipped D-first; `engine/team.py` (E1) is
+   still untouched and is the genuinely differentiated object. Recommend E1 next.
+4. **Game-log ingest for real M5 + gate-3 directional check.** Both are blocked
+   on per-game data that doesn't exist until 2026-27 opening night (Oct 20,
+   2026). See "M5" under Phase D for the exact endpoints. Not startable now.
 
 ---
 

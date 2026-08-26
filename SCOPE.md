@@ -29,9 +29,16 @@ it's v2+.
   are volume-weighted, not naively z-scored on the percentage.
 - **Draft board.** A ranked player list that re-sorts when the config changes.
 - **Buy-low / sell-high flags.** Compare each player's *current* production to
-  their DARKO true-skill projection; flag large divergences (hot = sell-high,
+  their true-skill projection; flag large divergences (hot = sell-high,
   cold = buy-low). This is the leap/regression feature, done honestly as a signal
-  layer on top of DARKO rather than a rival projection.
+  layer on top of the projection rather than a rival projection.
+  > **Status (2026-08-25): shipped as a projection-divergence report, not yet a
+  > true hot/cold signal.** `engine/divergence.py` + `cli/board.py --divergence`.
+  > Season-total production vs the projected line, in rank-delta + per-category
+  > terms. Honest limitation, stated in the tool itself: on season totals this
+  > is projection error, indistinguishable from real regression. True in-season
+  > hot/cold needs per-game game-log ingest (recent-form vs season-form) — not
+  > available until 2026-27 starts. See `BUILD_PLAN.md` → "M5".
 - **Backtest harness.** One held-out historical season; measure ranking quality
   against a baseline.
 - **Surface: CLI only.** Prints the board and writes a CSV. No web app, no
@@ -86,8 +93,16 @@ within v1 — include it only if the core slice lands with time to spare.)*
    > instead. Treat the baseline as amended to "DARKO-naive / last-season
    > persistence"; pulling real ADP is still the honest bar and remains open
    > (see `BUILD_PLAN.md` → Still open).
-   > *Directional check: not done.* Sell-high/buy-low is M5, not started — no
-   > flags exist to test regression against yet.
+   > *Directional check: not answerable with the current data, and not faked.*
+   > M5 shipped (2026-08-25) as a **projection-divergence report**
+   > (`engine/divergence.py`, `cli/board.py --divergence`) — but a divergence
+   > measured on season totals is projection error, not a regression signal: it
+   > cannot tell "producing above true talent, will regress" from "the
+   > projection was simply wrong." Measuring "share of sell-high flags whose
+   > rest-of-season production fell toward their projection" needs a season
+   > split into "through game N" / "games N+1..82", i.e. per-game game logs
+   > (`nba_api` `PlayerGameLog`, or date-filtered `LeagueDashPlayerStats`),
+   > which don't exist until 2026-27 is underway. See `BUILD_PLAN.md` → "M5".
 
 The backtest is the resume-critical piece — "I built it *and proved it*." It is
 designed in before coding because it dictates what data gets collected.

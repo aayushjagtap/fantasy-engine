@@ -215,3 +215,58 @@ def test_role_audit_mutually_exclusive_with_explain(monkeypatch, capsys):
     rc = main(["--role-audit", "--explain", "allround", "--league", "leagues/standard_9cat.json"])
     assert rc == 1
     assert capsys.readouterr().err.startswith("Error:")
+
+
+# --- M5: --divergence CLI mode ---
+
+# projected vs actual synthetic pair: id 3 blows up, id 4 collapses, rest equal.
+_DIV_PROJ = dict(SIX_PLAYER_FIXTURE)
+_DIV_ACT = dict(SIX_PLAYER_FIXTURE)
+_DIV_ACT[3] = dict(SIX_PLAYER_FIXTURE[3], pts=30, reb=12, ast=11, stl=2.2, blk=1.4, fg3m=3.5)
+_DIV_ACT[4] = dict(SIX_PLAYER_FIXTURE[4], pts=5, reb=2, ast=0.5, stl=0.3, blk=0.1, fg3m=0.4)
+
+
+def _patch_divergence_loader(monkeypatch):
+    monkeypatch.setattr(
+        "cli.board._load_divergence_players",
+        lambda args: (_DIV_PROJ, _DIV_ACT, "projected TEST from A, B, C, vs TEST actuals"),
+    )
+
+
+def test_divergence_routes_prints_caveat_and_sections(monkeypatch, capsys):
+    _patch_divergence_loader(monkeypatch)
+    rc = main(["--divergence", "--divergence-threshold", "0.5"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "NOT a hot/cold signal" in out
+    assert "PRODUCING ABOVE PROJECTION" in out
+    assert "PRODUCING BELOW PROJECTION" in out
+
+
+def test_divergence_runs_without_league(monkeypatch, capsys):
+    _patch_divergence_loader(monkeypatch)
+    rc = main(["--divergence", "--divergence-threshold", "0.5"])
+    assert rc == 0
+    assert "Standard 9-Cat" in capsys.readouterr().out
+
+
+def test_divergence_csv_has_flat_and_dz_columns(monkeypatch, tmp_path, capsys):
+    _patch_divergence_loader(monkeypatch)
+    path = tmp_path / "div.csv"
+    rc = main(["--divergence", "--divergence-threshold", "0.5", "--csv", str(path)])
+    assert rc == 0
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = list(csv.DictReader(f))
+    assert reader, "expected at least one flagged row"
+    cols = set(reader[0])
+    assert {"direction", "name", "projected_rank", "actual_rank", "rank_delta",
+            "weighted_delta", "reasons"} <= cols
+    assert {"dz_pts", "dz_fg_pct", "dz_ft_pct"} <= cols
+
+
+def test_divergence_mutually_exclusive_with_explain(monkeypatch, capsys):
+    _patch_divergence_loader(monkeypatch)
+    monkeypatch.setattr("cli.board._load_players", lambda args: (SIX_PLAYER_FIXTURE, "test"))
+    rc = main(["--divergence", "--explain", "allround", "--league", "leagues/standard_9cat.json"])
+    assert rc == 1
+    assert capsys.readouterr().err.startswith("Error:")
