@@ -40,6 +40,8 @@ CACHE_DIR = "data/cache"
 FIELD_MAP = {
     "PLAYER_ID": "nba_id",
     "PLAYER_NAME": "name",
+    "TEAM_ID": "team_id",
+    "TEAM_ABBREVIATION": "team",
     "AGE": "age",
     "GP": "gp",
     "MIN": "min",

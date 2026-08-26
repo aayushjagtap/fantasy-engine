@@ -94,8 +94,9 @@ def _score_predictors(actual: dict, baseline: dict, ours_off: dict, ours_on: dic
     return base_c, off_c, on_c, len(common)
 
 
-def run_backtest(target_season: str | None = None, min_gp: int = 20) -> None:
+def run_backtest(target_season: str | None = None, min_gp: int = 20, replacement_mode: str = "flat") -> None:
     from ingest.nba_boxscores import get_season_boxscores, recent_completed_seasons
+    from ingest.nba_rosters import attach_positions, load_rosters_or_warn
     from engine.projection import project_players, ROLE_DAMP
     from engine.value import compute_values
     from engine.league_config import standard_9cat
@@ -109,31 +110,62 @@ def run_backtest(target_season: str | None = None, min_gp: int = 20) -> None:
     print(f"  our projection uses: {', '.join(priors)}")
     print(f"  naive baseline uses: {priors[0]} actuals\n")
 
-    # Truth: actual fantasy value in the target season.
-    actual_board = compute_values(get_season_boxscores(target_season)[0], cfg, min_gp=min_gp)
-    actual = _values_by_id(actual_board)
-
+    # C2: position/team data, best-effort (empty until `python ingest/nba_rosters.py`
+    # has been run locally -- see ingest/nba_rosters.py). Attaching to prior_lines[0]
+    # only: project_players only ever reads position/team off the newest season a
+    # player appears in.
+    rosters = load_rosters_or_warn()
+    have_positions = bool(rosters)
+    target_lines = attach_positions(get_season_boxscores(target_season)[0], rosters=rosters)
     prior_lines = [get_season_boxscores(s)[0] for s in priors]
+    prior_lines[0] = attach_positions(prior_lines[0], rosters=rosters)
+    baseline_lines = attach_positions(get_season_boxscores(priors[0])[0], rosters=rosters)
+
+    def _boards(mode):
+        actual_board = compute_values(target_lines, cfg, min_gp=min_gp, replacement_mode=mode)
+        proj_on = compute_values(project_players(prior_lines, role_damp=ROLE_DAMP)[0], cfg,
+                                 min_gp=min_gp, replacement_mode=mode)
+        proj_off = compute_values(project_players(prior_lines, role_damp=0.0)[0], cfg,
+                                  min_gp=min_gp, replacement_mode=mode)
+        baseline_board = compute_values(baseline_lines, cfg, min_gp=min_gp, replacement_mode=mode)
+        return actual_board, proj_on, proj_off, baseline_board
+
+    # Truth: actual fantasy value in the target season.
+    actual_board, proj_on, proj_off, baseline_board = _boards(replacement_mode)
+    actual = _values_by_id(actual_board)
     # Ablation: our model with the role-trend ON vs OFF, to isolate its effect.
-    proj_on = compute_values(project_players(prior_lines, role_damp=ROLE_DAMP)[0], cfg, min_gp=min_gp)
-    proj_off = compute_values(project_players(prior_lines, role_damp=0.0)[0], cfg, min_gp=min_gp)
     ours_on = _values_by_id(proj_on)
     ours_off = _values_by_id(proj_off)
-
     # Baseline: last season's actual value, used as-is to predict this season.
-    baseline = _values_by_id(compute_values(get_season_boxscores(priors[0])[0], cfg, min_gp=min_gp))
+    baseline = _values_by_id(baseline_board)
 
     base_c, off_c, on_c, n = _score_predictors(actual, baseline, ours_off, ours_on)
 
     actual_top30 = {r["nba_id"] for r in actual_board[:30]}
     hits = sum(1 for r in proj_on[:30] if r["nba_id"] in actual_top30)
 
-    print(f"Players compared: {n}   (Spearman: 1.0 = perfect, higher = better)")
+    print(f"Players compared: {n}   (Spearman: 1.0 = perfect, higher = better)   replacement_mode={replacement_mode}")
     print(f"  naive baseline (repeat last season):   {base_c:.3f}")
     print(f"  ours, role-trend OFF:                  {off_c:.3f}")
     print(f"  ours, role-trend ON:                   {on_c:.3f}")
     print(f"  -> role-trend adds:  {on_c - off_c:+.3f}   |   vs baseline:  {on_c - base_c:+.3f}")
     print(f"  Top-30 hit rate: {hits}/30 of our projected top 30 finished top 30\n")
+
+    # C2: report whether positional replacement moves these numbers at all,
+    # without disturbing the primary (flat, reproduces-the-recorded-baseline)
+    # numbers printed above. Only fires on a plain flat run with position data
+    # on hand, so `python backtest/validate.py` shows the before/after in one go.
+    if replacement_mode == "flat" and have_positions:
+        h_actual, h_on, h_off, h_baseline = _boards("hybrid")
+        h_base_c, h_off_c, h_on_c, h_n = _score_predictors(
+            _values_by_id(h_actual), _values_by_id(h_baseline), _values_by_id(h_off), _values_by_id(h_on))
+        print(f"Same comparison under replacement_mode=hybrid (n={h_n}):")
+        print(f"  naive baseline:         {h_base_c:.3f}  ({h_base_c - base_c:+.3f} vs flat)")
+        print(f"  ours, role-trend OFF:   {h_off_c:.3f}  ({h_off_c - off_c:+.3f} vs flat)")
+        print(f"  ours, role-trend ON:    {h_on_c:.3f}  ({h_on_c - on_c:+.3f} vs flat)\n")
+    elif replacement_mode == "flat":
+        print("(No cached position data -- run `python ingest/nba_rosters.py` locally, "
+              "then rerun this to also compare replacement_mode=hybrid here.)\n")
 
     # Notable misses, ranked within the common set (insight, not just a number).
     ours = ours_on
@@ -166,5 +198,11 @@ if __name__ == "__main__":
     else:
         from util.console import configure_stdout_utf8
         configure_stdout_utf8()
-        seasons = [a for a in sys.argv[1:] if not a.startswith("-")]
-        run_backtest(seasons[0] if seasons else None)
+        argv = sys.argv[1:]
+        replacement_mode = "flat"
+        if "--replacement" in argv:
+            idx = argv.index("--replacement")
+            replacement_mode = argv[idx + 1]
+            argv = argv[:idx] + argv[idx + 2:]  # drop the flag AND its value before season-sniffing
+        seasons = [a for a in argv if not a.startswith("-")]
+        run_backtest(seasons[0] if seasons else None, replacement_mode=replacement_mode)

@@ -162,6 +162,10 @@ def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1
         line["ft_pct"] = (line["ftm"] / line["fta"]) if line["fta"] else 0.0
         line["name"] = latest.get("name")
         line["age"] = proj_age
+        # Position/team aren't box-score components -- they don't age or scale,
+        # just pass through from the newest season a player appears in (C1).
+        line["position"] = latest.get("position", ())
+        line["team"] = latest.get("team")
         projected[pid] = line
 
     return projected, aged

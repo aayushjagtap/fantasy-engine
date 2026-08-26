@@ -33,6 +33,19 @@ if _ROOT not in sys.path:
 
 from engine.league_config import CATEGORY_META, ScoringType  # noqa: E402
 
+# Roster slot name -> coarse position-eligibility group, or None for a
+# position-blind slot (UTIL/BENCH, and any custom slot name we don't
+# recognize -- unknown slots fall back to the flat pool by design). Positions
+# ingested from CommonTeamRoster (C1) only distinguish G/F/C, not PG/SG/SF/PF,
+# so PG and SG share the "G" group, SF and PF share "F".
+SLOT_GROUP: dict[str, str | None] = {
+    "PG": "G", "SG": "G", "G": "G",
+    "SF": "F", "PF": "F", "F": "F",
+    "C": "C",
+    "UTIL": None, "BENCH": None,
+}
+REPLACEMENT_MODES = ("flat", "strict", "hybrid")
+
 Z_CAP = 3.0
 # Availability softening: in availability-adjusted mode, stats scale by games**AVAIL_ALPHA.
 #   1.0 -> pure season totals (availability counts fully)
@@ -113,9 +126,75 @@ def _draft_pool_ids(scaled, config, pool_size, z_cap=Z_CAP):
     return sorted(pass1, key=pass1.get, reverse=True)[:pool_size]
 
 
+def _position_demand(config, mode):
+    """(demand_by_group, flex_demand) -- league-wide player counts by position
+    group ('G'/'F'/'C'), per `mode`. Both 'strict' and 'hybrid' count dedicated
+    slots (PG/SG/G, SF/PF/F, C) toward their group's demand. They differ on
+    UTIL/BENCH (and any unrecognized custom slot name): 'hybrid' leaves that
+    demand on the flat/global pool -- UTIL/BENCH are position-blind by
+    construction, so folding their count into G/F/C would inflate every
+    position's scarcity based on bench-slot count, a roster-construction
+    artifact, not a scarcity signal. 'strict' instead distributes it across
+    G/F/C proportionally to each group's existing share of dedicated slots,
+    so every roster spot is attributed to a position and there's no flat
+    tier at all."""
+    demand = {"G": 0, "F": 0, "C": 0}
+    flex = 0
+    for slot in config.roster:
+        group = SLOT_GROUP.get(slot.position)
+        n = slot.count * config.num_teams
+        if group:
+            demand[group] += n
+        else:
+            flex += n
+    if mode == "strict" and flex:
+        dedicated_total = sum(demand.values())
+        if dedicated_total:
+            for group in demand:
+                demand[group] += round(flex * demand[group] / dedicated_total)
+        flex = 0
+    return demand, flex
+
+
+def _group_replacement_levels(value, positions, ranked_all, demand):
+    """{'G'/'F'/'C': value} -- the value of the Nth-best position-eligible
+    player for each group with demand > 0, ranked by the same global `value`
+    used everywhere else (the z-score baseline pool stays flat regardless of
+    replacement_mode -- only the replacement reference point is positional).
+    A group with demand but zero position-tagged candidates (no position data
+    ingested yet) is omitted; callers fall back to the flat replacement."""
+    levels = {}
+    for group, n in demand.items():
+        if n <= 0:
+            continue
+        candidates = [pid for pid in ranked_all if group in (positions.get(pid) or ())]
+        if not candidates:
+            continue
+        idx = min(n, len(candidates)) - 1
+        levels[group] = value[candidates[idx]]
+    return levels
+
+
 def compute_values(players, config, min_gp=20, pool_size=None, basis="availability_adjusted",
-                   z_cap=Z_CAP, avail_alpha=AVAIL_ALPHA):
-    """Ranked board (highest value first): {rank, nba_id, name, value, vor}."""
+                   z_cap=Z_CAP, avail_alpha=AVAIL_ALPHA, replacement_mode="flat"):
+    """Ranked board (highest VOR first): {rank, nba_id, name, position, value, vor}.
+
+    replacement_mode ('flat' default, or 'strict'/'hybrid'; see _position_demand)
+    controls the replacement-level REFERENCE POINT subtracted from `value` to
+    get `vor` -- it does not change `value` itself (the category z-scores are
+    always baselined on the flat draftable pool). Under 'flat' this is a single
+    scalar for every player, so ranking by value or by vor is identical (that's
+    why the pre-C2 code could rank by value alone). Under 'strict'/'hybrid' the
+    replacement point varies by position, so value-order and vor-order diverge
+    -- the board is ranked by vor so positional scarcity actually moves players,
+    not just the displayed number.
+
+    Points leagues have no positional-scarcity concept baked into the value
+    calc (no category z-scoring, so no position-eligible sub-pools to rank
+    within) and always use the flat replacement regardless of replacement_mode.
+    """
+    if replacement_mode not in REPLACEMENT_MODES:
+        raise ValueError(f"replacement_mode must be one of {REPLACEMENT_MODES}, got {replacement_mode!r}")
     eligible = {i: p for i, p in players.items() if (p.get("gp") or 0) >= min_gp}
     if not eligible:
         return []
@@ -132,10 +211,26 @@ def compute_values(players, config, min_gp=20, pool_size=None, basis="availabili
         pool_ids = _draft_pool_ids(scaled, config, pool_size, z_cap)
         value = _category_totals(scaled, config, pool_ids, z_cap)
 
-    ranked = sorted(value, key=value.get, reverse=True)
-    replacement = value[ranked[min(pool_size, len(ranked)) - 1]]
+    by_value = sorted(value, key=value.get, reverse=True)
+    flat_replacement = value[by_value[min(pool_size, len(by_value)) - 1]]
+
+    if replacement_mode == "flat" or config.scoring_type is ScoringType.POINTS:
+        def replacement_for(pid):
+            return flat_replacement
+    else:
+        positions = {i: eligible[i].get("position") for i in eligible}
+        demand, _flex = _position_demand(config, replacement_mode)
+        group_levels = _group_replacement_levels(value, positions, by_value, demand)
+
+        def replacement_for(pid):
+            applicable = [group_levels[g] for g in (positions.get(pid) or ()) if g in group_levels]
+            return min(applicable) if applicable else flat_replacement
+
+    vor = {i: value[i] - replacement_for(i) for i in value}
+    ranked = sorted(vor, key=vor.get, reverse=True)
     return [{"rank": n + 1, "nba_id": i, "name": eligible[i].get("name"),
-             "value": round(value[i], 2), "vor": round(value[i] - replacement, 2)}
+             "position": eligible[i].get("position") or (),
+             "value": round(value[i], 2), "vor": round(vor[i], 2)}
             for n, i in enumerate(ranked)]
 
 

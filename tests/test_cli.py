@@ -68,7 +68,7 @@ def test_board_rows_covers_all_eligible_players_sorted_by_rank():
     rows = _board_rows(SIX_PLAYER_FIXTURE, standard_9cat(), "availability_adjusted")
     assert len(rows) == 6
     assert [r["rank"] for r in rows] == list(range(1, 7))
-    expected_keys = {"rank", "name", "nba_id", "value", "vor",
+    expected_keys = {"rank", "name", "nba_id", "position", "value", "vor",
                       "availability_adjusted_rank", "per_game_rank", "rank_delta"}
     assert set(rows[0].keys()) == expected_keys
 

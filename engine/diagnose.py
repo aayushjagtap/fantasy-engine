@@ -13,7 +13,7 @@ from crosswalk.spike import normalize_name
 
 
 def explain(players, config, target_name, min_gp=20, pool_size=None, basis="availability_adjusted",
-            z_cap=Z_CAP, avail_alpha=AVAIL_ALPHA):
+            z_cap=Z_CAP, avail_alpha=AVAIL_ALPHA, replacement_mode="flat"):
     eligible = {i: p for i, p in players.items() if (p.get("gp") or 0) >= min_gp}
     if not eligible:
         print("no eligible players")
@@ -42,10 +42,13 @@ def explain(players, config, target_name, min_gp=20, pool_size=None, basis="avai
         return None, None
 
     board = compute_values(players, config, min_gp=min_gp, pool_size=pool_size,
-                           basis=basis, z_cap=z_cap, avail_alpha=avail_alpha)
+                           basis=basis, z_cap=z_cap, avail_alpha=avail_alpha,
+                           replacement_mode=replacement_mode)
     rank = next((r["rank"] for r in board if r["nba_id"] == tid), None)
     p = eligible[tid]
-    print(f"\n{p.get('name')}  (proj age {p.get('age')}, {round(p.get('gp') or 0)} GP)  ->  rank #{rank}")
+    position = "/".join(p.get("position") or ()) or "?"
+    print(f"\n{p.get('name')}  (proj age {p.get('age')}, {round(p.get('gp') or 0)} GP, pos {position})"
+          f"  ->  rank #{rank}  (replacement_mode={replacement_mode})")
     if p.get("role_mult") is not None:
         trend = "expanding role" if p["role_mult"] > 1 else "shrinking role" if p["role_mult"] < 1 else "flat role"
         print(f"  role trend multiplier: {p['role_mult']:.3f}  ({trend}, from minutes trajectory)")
