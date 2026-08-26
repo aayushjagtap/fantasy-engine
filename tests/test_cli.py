@@ -68,7 +68,7 @@ def test_board_rows_covers_all_eligible_players_sorted_by_rank():
     rows = _board_rows(SIX_PLAYER_FIXTURE, standard_9cat(), "availability_adjusted")
     assert len(rows) == 6
     assert [r["rank"] for r in rows] == list(range(1, 7))
-    expected_keys = {"rank", "name", "nba_id", "position", "value", "vor",
+    expected_keys = {"rank", "name", "nba_id", "position", "is_rookie", "value", "vor",
                       "availability_adjusted_rank", "per_game_rank", "rank_delta"}
     assert set(rows[0].keys()) == expected_keys
 
@@ -157,3 +157,61 @@ def test_missing_league_file_returns_clean_error_not_traceback(monkeypatch, caps
     assert rc == 1
     assert captured.err.startswith("Error:")
     assert "Traceback" not in captured.err
+
+
+# --- C3: rookie marker in the printed board and CSV ---
+
+_ROOKIE_FIXTURE = dict(SIX_PLAYER_FIXTURE)
+_ROOKIE_FIXTURE[-2026001] = dict(
+    name="AJ Dybantsa", gp=68, pts=17, reb=6, ast=3, stl=1.0, blk=0.7,
+    tov=2.4, fg3m=1.6, fg_pct=0.45, fga=15, ft_pct=0.78, fta=4.6, is_rookie=True,
+)
+
+
+def test_board_rows_and_print_table_mark_rookies(capsys):
+    rows = _board_rows(_ROOKIE_FIXTURE, standard_9cat(), "availability_adjusted")
+    rookie_row = next(r for r in rows if r["nba_id"] == -2026001)
+    assert rookie_row["is_rookie"] is True
+    _print_table(rows, "Test League", "desc", "availability_adjusted", top=len(rows))
+    out = capsys.readouterr().out
+    assert "AJ Dybantsa (R)" in out
+    assert "data/rookies_2026.json" in out
+
+
+def test_csv_has_is_rookie_column(tmp_path):
+    rows = _board_rows(_ROOKIE_FIXTURE, standard_9cat(), "availability_adjusted")
+    path = tmp_path / "board.csv"
+    _write_csv(str(path), rows)
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = list(csv.DictReader(f))
+    assert "is_rookie" in reader[0]
+    row = next(r for r in reader if r["nba_id"] == "-2026001")
+    assert row["is_rookie"] == "True"
+
+
+# --- C4: --role-audit CLI mode ---
+
+def test_role_audit_runs_without_league_and_reports_empty_intersection(monkeypatch, capsys):
+    monkeypatch.setattr("cli.board._load_players", lambda args: (SIX_PLAYER_FIXTURE, "test"))
+    rc = main(["--role-audit"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "changed teams" in out
+    assert "no team-changers intersect" in out  # synthetic ids never match real roster data
+
+
+def test_role_audit_lists_a_team_changer_on_the_board(monkeypatch, capsys):
+    monkeypatch.setattr("cli.board._load_players", lambda args: (SIX_PLAYER_FIXTURE, "test"))
+    monkeypatch.setattr("ingest.nba_rosters.team_changes", lambda offline=True: {3: ("DAL", "LAL")})
+    rc = main(["--role-audit", "--league", "leagues/standard_9cat.json"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "allround" in out
+    assert "DAL -> LAL" in out
+
+
+def test_role_audit_mutually_exclusive_with_explain(monkeypatch, capsys):
+    monkeypatch.setattr("cli.board._load_players", lambda args: (SIX_PLAYER_FIXTURE, "test"))
+    rc = main(["--role-audit", "--explain", "allround", "--league", "leagues/standard_9cat.json"])
+    assert rc == 1
+    assert capsys.readouterr().err.startswith("Error:")

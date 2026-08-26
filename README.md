@@ -125,6 +125,38 @@ These files demonstrate config *shape*, not recommended strategy --
 (punting two categories plus non-default category weights) chosen to
 exercise those knobs, not a build to copy blindly into a real draft.
 
+## Two hand-maintained data files
+
+The projection is a box-score model, so two things it structurally can't know
+are patched in by hand. Both live under `data/` (which is otherwise
+gitignored -- these two are explicitly un-ignored, like `data/cache/`), both
+are optional (a missing file changes nothing), and both are surfaced in the
+board so they're never silent.
+
+- **`data/rookies_2026.json`** -- the incoming draft class. `project_players`
+  only projects players who appeared in the most recent season, so without
+  this the entire rookie class is absent from a 2026-27 board. Entries carry
+  a per-game line and merge in flagged `is_rookie` (marked `(R)` on the
+  board, an `is_rookie` column in the CSV, excluded from the backtest).
+  **Stat keys ship as `null` on purpose**: `load_rookies()` skips any entry
+  whose line isn't filled in and logs how many it skipped, so an unfilled
+  rookie stays off the board rather than showing up as a fabricated
+  projection. `nba_id`s are synthetic negatives until the real ones exist --
+  see the file's `_comment` for the lifecycle (purge it once 2026-27 actuals
+  are ingested, or players double-count).
+
+- **`data/role_overrides.json`** -- `{nba_id: multiplier}`. The role-trend
+  signal reads a minutes trajectory and can't see an offseason team change,
+  so it fades players who just landed bigger roles (and vice versa). An
+  override *replaces* the computed trend multiplier for that player; the
+  model's own value is still shown next to it in `--explain`. Ships empty --
+  every entry is a hand judgement about one player.
+
+  ```
+  # who changed teams for 2026-27, ranked by projected value -- the shortlist:
+  python -m cli.board --role-audit --league leagues/standard_9cat.json
+  ```
+
 ## Tests
 
 ```

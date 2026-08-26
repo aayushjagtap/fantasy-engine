@@ -121,6 +121,9 @@ def run_backtest(target_season: str | None = None, min_gp: int = 20, replacement
     prior_lines[0] = attach_positions(prior_lines[0], rosters=rosters)
     baseline_lines = attach_positions(get_season_boxscores(priors[0])[0], rosters=rosters)
 
+    # No rookies= / role_overrides= here on purpose: the 2026 draft class and the
+    # 2026-27 offseason role overrides (C3/C4) say nothing about a historical
+    # target season, and feeding them in would only contaminate the backtest.
     def _boards(mode):
         actual_board = compute_values(target_lines, cfg, min_gp=min_gp, replacement_mode=mode)
         proj_on = compute_values(project_players(prior_lines, role_damp=ROLE_DAMP)[0], cfg,

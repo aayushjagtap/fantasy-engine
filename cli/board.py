@@ -29,7 +29,7 @@ from pathlib import Path
 import pydantic
 
 from engine.diagnose import explain
-from engine.league_config import LeagueConfig
+from engine.league_config import LeagueConfig, standard_9cat
 from engine.value import REPLACEMENT_MODES, _rank_movers, compute_values
 
 
@@ -48,6 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "behavior); 'hybrid'/'strict' need position data -- see ingest/nba_rosters.py")
     p.add_argument("--explain", metavar="NAME", help="print a per-category breakdown for one player")
     p.add_argument("--compare", nargs=2, metavar=("A", "B"), help="two league configs to diff movers between")
+    p.add_argument("--role-audit", action="store_true",
+                   help="report players who changed teams for the upcoming season, ranked by projected "
+                        "value -- the candidate list for data/role_overrides.json (--league optional)")
     p.add_argument("--season", help="season anchoring the 3-season projection window (default: latest 3 completed)")
     p.add_argument("--actuals", action="store_true", help="use one season's raw box scores instead of projecting")
     return p
@@ -82,7 +85,9 @@ def _load_players(args: argparse.Namespace) -> tuple[dict, str]:
         players, _src = get_season_boxscores(season)
         return attach_positions(players, rosters=rosters), f"actuals: {season}"
 
-    from engine.projection import _next_season_label, project_players
+    from engine.projection import (
+        _next_season_label, load_role_overrides, load_rookies, project_players,
+    )
 
     seasons = _projection_window(args.season)
     lines = [get_season_boxscores(s)[0] for s in seasons]
@@ -90,7 +95,14 @@ def _load_players(args: argparse.Namespace) -> tuple[dict, str]:
     # appears in (history[0], always seasons[0] for players it projects) --
     # attaching to the rest would just be repeat work on data never read.
     lines[0] = attach_positions(lines[0], rosters=rosters)
-    projected, _aged = project_players(lines)
+    # C3: hand-entered 2026 draft class. load_rookies() skips (and logs) any
+    # rookie whose stat line isn't filled in yet, so the shipped null-stat file
+    # simply contributes nobody until it's populated.
+    # C4: hand role overrides replace the minutes-trajectory multiplier for
+    # players whose offseason team change the trajectory can't see. --explain
+    # surfaces any that applied.
+    projected, _aged = project_players(
+        lines, rookies=load_rookies(), role_overrides=load_role_overrides())
     upcoming = _next_season_label(seasons[0])
     return projected, f"projected {upcoming} from {', '.join(seasons)}"
 
@@ -115,6 +127,7 @@ def _board_rows(players: dict, cfg: LeagueConfig, basis: str, replacement_mode: 
             "name": r["name"],
             "nba_id": nba_id,
             "position": "/".join(r.get("position") or ()) or "?",
+            "is_rookie": bool(r.get("is_rookie")),
             "value": r["value"],
             "vor": r["vor"],
             "availability_adjusted_rank": adj_rank,
@@ -124,7 +137,7 @@ def _board_rows(players: dict, cfg: LeagueConfig, basis: str, replacement_mode: 
     return rows
 
 
-_CSV_FIELDS = ("rank", "name", "nba_id", "position", "value", "vor",
+_CSV_FIELDS = ("rank", "name", "nba_id", "position", "is_rookie", "value", "vor",
                "availability_adjusted_rank", "per_game_rank", "rank_delta")
 
 
@@ -134,10 +147,13 @@ def _print_table(rows: list[dict], league_name: str, description: str, basis: st
     print(f"{'#':>4} {'player':<26} {'pos':>5} {'value':>8} {'vor':>7} {'adj#':>6} {'pg#':>6} {'delta':>6}")
     print("-" * 74)
     for row in rows[:top]:
-        print(f"{row['rank']:>4} {(row['name'] or '?'):<26} {row['position']:>5} {row['value']:>8} {row['vor']:>7} "
+        disp = (row['name'] or '?') + (' (R)' if row.get('is_rookie') else '')
+        print(f"{row['rank']:>4} {disp:<26} {row['position']:>5} {row['value']:>8} {row['vor']:>7} "
               f"{row['availability_adjusted_rank']:>6} {row['per_game_rank']:>6} {row['rank_delta']:>+6}")
     if len(rows) > top:
         print(f"... {len(rows) - top} more (use --csv to export the full board)")
+    if any(row.get('is_rookie') for row in rows[:top]):
+        print("  (R) = 2026 draft class, hand-entered line from data/rookies_2026.json")
 
 
 def _write_csv(path: str, rows: list[dict]) -> None:
@@ -171,6 +187,44 @@ def cmd_compare(args: argparse.Namespace, players: dict) -> int:
     return 0
 
 
+def cmd_role_audit(args: argparse.Namespace, players: dict) -> int:
+    """C4 diagnostic: who changed teams for the upcoming season, ranked by
+    projected value -- the shortlist for a hand-written role override. Reports
+    only; it never writes data/role_overrides.json."""
+    from engine.projection import load_role_overrides
+    from ingest.nba_rosters import team_changes
+
+    cfg = LeagueConfig.load(args.league) if args.league else standard_9cat()
+    changes = team_changes(offline=True)
+    overrides = load_role_overrides()
+    board = compute_values(players, cfg, basis=args.basis, replacement_mode=args.replacement)
+    by_id = {r["nba_id"]: r for r in board}
+
+    rows = []
+    for pid, (old, new) in changes.items():
+        r = by_id.get(pid)
+        if not r:  # changed teams but not in the projected/eligible board (hurt, retired, <min GP)
+            continue
+        role_mult = (players.get(pid) or {}).get("role_mult")
+        rows.append((r["value"], r["rank"], r["name"], role_mult, old, new, pid in overrides))
+    rows.sort(key=lambda t: t[0], reverse=True)
+
+    print(f"\n{cfg.name}: players who changed teams for the upcoming season, ranked by projected value")
+    print(f"basis={args.basis}  |  role_mult = model's minutes-trajectory multiplier (pre-override)  |  "
+          f"* = already in data/role_overrides.json")
+    print(f"{'#':>4} {'player':<26} {'value':>8} {'role_mult':>10}  {'move':<12} ovr")
+    print("-" * 74)
+    for value, rank, name, role_mult, old, new, has_ovr in rows:
+        rm = f"{role_mult:.3f}" if role_mult is not None else "  -  "
+        print(f"{rank:>4} {(name or '?'):<26} {value:>8} {rm:>10}  {old + ' -> ' + new:<12} {'*' if has_ovr else ''}")
+    if not rows:
+        print("  (no team-changers intersect the projected board)")
+    else:
+        print(f"\n{len(rows)} team-changers on the board. "
+              f"Low role_mult + bigger new role = prime override candidate.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     from util.console import configure_stdout_utf8
 
@@ -178,11 +232,11 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     args.basis = _normalize_basis(args.basis)
 
-    if args.explain and args.compare:
-        print("Error: --explain and --compare are mutually exclusive", file=sys.stderr)
+    if sum(bool(x) for x in (args.explain, args.compare, args.role_audit)) > 1:
+        print("Error: --explain, --compare and --role-audit are mutually exclusive", file=sys.stderr)
         return 1
-    if not args.league and not args.compare:
-        print("Error: --league is required unless --compare is given", file=sys.stderr)
+    if not args.league and not args.compare and not args.role_audit:
+        print("Error: --league is required unless --compare or --role-audit is given", file=sys.stderr)
         return 1
 
     try:
@@ -190,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.compare:
             return cmd_compare(args, players)
+        if args.role_audit:
+            return cmd_role_audit(args, players)
 
         cfg = LeagueConfig.load(args.league)
 

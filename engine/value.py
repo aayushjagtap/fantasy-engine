@@ -230,6 +230,7 @@ def compute_values(players, config, min_gp=20, pool_size=None, basis="availabili
     ranked = sorted(vor, key=vor.get, reverse=True)
     return [{"rank": n + 1, "nba_id": i, "name": eligible[i].get("name"),
              "position": eligible[i].get("position") or (),
+             "is_rookie": bool(eligible[i].get("is_rookie")),
              "value": round(value[i], 2), "vor": round(vor[i], 2)}
             for n, i in enumerate(ranked)]
 

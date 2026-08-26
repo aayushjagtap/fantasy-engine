@@ -25,12 +25,19 @@ Run from the repo root:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
+
+# Hand-maintained data files merged into the projection (C3 rookies, C4 role
+# overrides). Both are optional -- a missing file degrades to "no rookies" /
+# "no overrides", never an error. See each file's own _comment for its contract.
+ROOKIES_PATH = os.path.join(_ROOT, "data", "rookies_2026.json")
+ROLE_OVERRIDES_PATH = os.path.join(_ROOT, "data", "role_overrides.json")
 
 # Most-recent-first weights over the last N seasons a player appears in.
 RECENCY_WEIGHTS = [0.5, 0.3, 0.2]
@@ -106,7 +113,8 @@ def _weighted_line(history: list[dict]) -> dict:
 
 
 def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1,
-                    role_damp: float = ROLE_DAMP) -> tuple[dict, int]:
+                    role_damp: float = ROLE_DAMP, rookies: dict | None = None,
+                    role_overrides: dict | None = None) -> tuple[dict, int]:
     """
     seasons_newest_first: list of {nba_id: line}, newest season first.
     Returns ({nba_id: projected_line}, n_players_with_age) for the upcoming season.
@@ -114,6 +122,19 @@ def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1
     Only players who appeared in the MOST RECENT season are projected -- otherwise
     the union of several seasons pulls in players now out of the league, filling the
     deep end with erratic small-sample lines. We project who's actually around.
+
+    rookies ({nba_id: projected_line}, e.g. from load_rookies()): hand-entered
+    draft-class lines with no NBA history to project from. Merged in after the
+    projection loop via setdefault, so a real projection always wins an id
+    collision. Each carries is_rookie=True so the board can mark them and the
+    backtest can leave them out (the backtest simply never passes this arg --
+    a future draft class has nothing to say about a past season).
+
+    role_overrides ({nba_id: multiplier}, e.g. from load_role_overrides()):
+    applied AFTER _role_trend_mult and REPLACING it -- the minutes-trajectory
+    signal can't see an offseason team change. The trajectory result is still
+    computed and kept as line["role_trend_mult"]; line["role_override"] records
+    the override; line["role_mult"] is the effective (post-override) value.
     """
     if not seasons_newest_first:
         return {}, 0
@@ -142,10 +163,18 @@ def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1
         # so an expanding role projects up and a fading vet down. Targets the
         # veteran-collapse busts the backtest exposed. (Breakouts from near-zero
         # minutes still need external opportunity data -- that's the next step.)
-        role_mult = _role_trend_mult([h.get("min") for h in history], damp=role_damp)
+        # C4: a hand override, if present for this player, REPLACES the trajectory
+        # multiplier (the trajectory can't see an offseason team change). The
+        # trajectory value is still recorded so --explain can show both.
+        trend_mult = _role_trend_mult([h.get("min") for h in history], damp=role_damp)
+        override = (role_overrides or {}).get(pid)
+        role_mult = float(override) if override is not None else trend_mult
         for comp in ROLE_COMPONENTS:
             line[comp] *= role_mult
         line["role_mult"] = round(role_mult, 3)
+        line["role_trend_mult"] = round(trend_mult, 3)
+        if override is not None:
+            line["role_override"] = float(override)
 
         # Injury-history-aware games projection. Blend the recency-weighted games
         # with the player's BEST recent season: a one-off injury is rescued by
@@ -168,12 +197,77 @@ def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1
         line["team"] = latest.get("team")
         projected[pid] = line
 
+    # C3: merge hand-entered draft-class rookies. setdefault so a real projection
+    # (should an id ever collide -- synthetic negative ids make that near-impossible)
+    # is never clobbered by a hand line.
+    for pid, rookie_line in (rookies or {}).items():
+        projected.setdefault(pid, rookie_line)
+
     return projected, aged
 
 
 def _next_season_label(latest: str) -> str:
     start = int(latest.split("-")[0]) + 1
     return f"{start}-{str(start + 1)[2:]}"
+
+
+# Stat keys a rookie entry must ALL carry (non-null) to be projectable -- the
+# per-game components the value engine reads. pts/fg_pct/ft_pct are derived.
+_ROOKIE_REQUIRED_STATS = ("gp", "min", "fgm", "fga", "fg3m", "ftm", "fta",
+                          "reb", "ast", "stl", "blk", "tov")
+
+
+def _rookie_line(entry: dict) -> dict:
+    """One data/rookies_2026.json entry -> a line shaped like project_players' output."""
+    line = {k: float(entry[k]) for k in _ROOKIE_REQUIRED_STATS}
+    line["pts"] = 2 * line["fgm"] + line["fg3m"] + line["ftm"]
+    line["fg_pct"] = (line["fgm"] / line["fga"]) if line["fga"] else 0.0
+    line["ft_pct"] = (line["ftm"] / line["fta"]) if line["fta"] else 0.0
+    line["name"] = entry.get("name")
+    line["age"] = entry.get("age")
+    pos = entry.get("position") or ()
+    line["position"] = tuple(pos) if isinstance(pos, (list, tuple)) else (pos,)
+    line["team"] = entry.get("team")
+    line["role_mult"] = 1.0  # no history -> no trajectory to trend
+    line["is_rookie"] = True
+    return line
+
+
+def load_rookies(path: str = ROOKIES_PATH, verbose: bool = True) -> dict[int, dict]:
+    """{nba_id: projected_line} for hand-entered draft-class rookies.
+
+    An entry whose stat line is incomplete (any of _ROOKIE_REQUIRED_STATS null
+    or missing) is SKIPPED -- the shipped file has null stat lines by design, so
+    an unfilled rookie stays off the board rather than being rendered as a
+    fabricated projection indistinguishable from a real one. The skipped count
+    is logged to stderr (verbose=True) so the omission is visible. A missing
+    file returns {} (rookies are optional)."""
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        doc = json.load(f)
+    out: dict[int, dict] = {}
+    skipped = 0
+    for entry in doc.get("rookies", []):
+        if any(entry.get(k) is None for k in _ROOKIE_REQUIRED_STATS):
+            skipped += 1
+            continue
+        out[int(entry["nba_id"])] = _rookie_line(entry)
+    if verbose and skipped:
+        print(f"load_rookies: {len(out)} rookie(s) with a full stat line, {skipped} "
+              f"skipped (stat line not yet filled in {os.path.basename(path)})",
+              file=sys.stderr)
+    return out
+
+
+def load_role_overrides(path: str = ROLE_OVERRIDES_PATH) -> dict[int, float]:
+    """{nba_id: multiplier} hand-edited role overrides. Keys starting with '_'
+    (comment / notes blocks) are ignored. A missing file returns {}."""
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        doc = json.load(f)
+    return {int(k): float(v) for k, v in doc.items() if not str(k).startswith("_")}
 
 
 def _demo() -> None:
@@ -185,7 +279,8 @@ def _demo() -> None:
     configure_stdout_utf8()
     seasons = recent_completed_seasons(3)  # newest first
     lines = [get_season_boxscores(s)[0] for s in seasons]
-    projected, aged = project_players(lines)
+    projected, aged = project_players(lines, rookies=load_rookies(),
+                                     role_overrides=load_role_overrides())
     upcoming = _next_season_label(seasons[0])
 
     print(f"Projecting {upcoming} from {', '.join(seasons)}")

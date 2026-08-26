@@ -150,6 +150,30 @@ def get_current_rosters(force: bool = False, offline: bool = False) -> tuple[dic
     return merged, stats
 
 
+def team_changes(force: bool = False, offline: bool = False) -> dict[int, tuple[str, str]]:
+    """{nba_id: (old_team, new_team)} for every player on a roster in BOTH the
+    most recently completed season and the upcoming one whose team abbreviation
+    differs -- the offseason movement _role_trend_mult (engine/projection.py)
+    can't see. Players present in only one season (incoming rookies, players who
+    left the league) are omitted: there's no before/after to compare. Reads the
+    same per-team CommonTeamRoster cache as get_season_rosters -- diagnostic
+    only, it drives no automatic adjustment (that stays in data/role_overrides.json,
+    hand-edited)."""
+    from ingest.nba_boxscores import recent_completed_seasons
+
+    latest_completed = recent_completed_seasons(1)[0]
+    upcoming = _next_season(latest_completed)
+    old, _ = get_season_rosters(latest_completed, force=force, offline=offline)
+    new, _ = get_season_rosters(upcoming, force=force, offline=offline)
+
+    out: dict[int, tuple[str, str]] = {}
+    for pid, r in new.items():
+        o = old.get(pid)
+        if o and o.get("team") and r.get("team") and o["team"] != r["team"]:
+            out[pid] = (o["team"], r["team"])
+    return out
+
+
 def load_rosters_or_warn(quiet: bool = False) -> dict[int, dict]:
     """Best-effort position/team lookup, cache-only (offline=True): a missing
     roster cache degrades to an empty map (the flat replacement handles unknown

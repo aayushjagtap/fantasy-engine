@@ -2,6 +2,8 @@
 __pycache__/
 data/*
 !data/cache/
+!data/rookies_2026.json
+!data/role_overrides.json
 *.pyc
 scratch_*.py
 out/

@@ -50,8 +50,17 @@ def explain(players, config, target_name, min_gp=20, pool_size=None, basis="avai
     print(f"\n{p.get('name')}  (proj age {p.get('age')}, {round(p.get('gp') or 0)} GP, pos {position})"
           f"  ->  rank #{rank}  (replacement_mode={replacement_mode})")
     if p.get("role_mult") is not None:
-        trend = "expanding role" if p["role_mult"] > 1 else "shrinking role" if p["role_mult"] < 1 else "flat role"
-        print(f"  role trend multiplier: {p['role_mult']:.3f}  ({trend}, from minutes trajectory)")
+        eff = p["role_mult"]
+        trend = "expanding role" if eff > 1 else "shrinking role" if eff < 1 else "flat role"
+        if p.get("role_override") is not None:
+            pre = p.get("role_trend_mult")
+            pre_s = f"{pre:.3f}" if pre is not None else "n/a"
+            print(f"  role trend multiplier: {eff:.3f}  ({trend}; MANUAL OVERRIDE from "
+                  f"data/role_overrides.json, model computed {pre_s} from minutes trajectory)")
+        else:
+            print(f"  role trend multiplier: {eff:.3f}  ({trend}, from minutes trajectory)")
+    if p.get("is_rookie"):
+        print("  rookie: 2026 draft class -- hand-entered line from data/rookies_2026.json, not a model projection")
 
     if config.scoring_type is ScoringType.POINTS:
         print(f"{'stat':<8} {'per-game':>9} {'points':>9}")
@@ -118,12 +127,13 @@ if __name__ == "__main__":
     else:
         # demo path uses the real ingest/projection when run in the repo
         from ingest.nba_boxscores import get_season_boxscores, recent_completed_seasons
-        from engine.projection import project_players
+        from engine.projection import load_role_overrides, load_rookies, project_players
         from engine.league_config import standard_9cat
         from util.console import configure_stdout_utf8
         configure_stdout_utf8()
         name = " ".join(a for a in sys.argv[1:] if not a.startswith("-")).strip() or "Jamal Murray"
         seasons = recent_completed_seasons(3)
         lines = [get_season_boxscores(s)[0] for s in seasons]
-        projected, _ = project_players(lines)
+        projected, _ = project_players(lines, rookies=load_rookies(),
+                                      role_overrides=load_role_overrides())
         explain(projected, standard_9cat(), name)
