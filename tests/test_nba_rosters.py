@@ -8,6 +8,7 @@ from ingest.nba_rosters import (
     _rows_to_roster,
     attach_positions,
     get_season_rosters,
+    load_rosters_or_warn,
     normalize_position,
 )
 
@@ -103,6 +104,36 @@ def test_get_season_rosters_offline_miss_fails_fast(monkeypatch, tmp_path):
     monkeypatch.setattr("ingest.nba_rosters._fetch_team_roster", fail_if_called)
     with pytest.raises(OfflineCacheMissError):
         get_season_rosters("2025-26", offline=True)
+
+
+# --- load_rosters_or_warn: the "no cache" degradation path ---
+# tests/test_cli.py and test_validate.py monkeypatch _load_players / higher-level
+# loaders wholesale, so this fallback (which cli/board.py and backtest/validate.py
+# both lean on) is only exercised here.
+
+def _empty_cache(monkeypatch, tmp_path):
+    monkeypatch.setattr("ingest.nba_boxscores.CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr("ingest.nba_rosters._team_list", lambda: [(1, "AAA")])
+
+    def fail_if_called(team_id, season):
+        raise AssertionError("offline degradation must not attempt the network")
+
+    monkeypatch.setattr("ingest.nba_rosters._fetch_team_roster", fail_if_called)
+
+
+def test_load_rosters_or_warn_degrades_to_empty_map_with_stderr_notice(monkeypatch, tmp_path, capsys):
+    _empty_cache(monkeypatch, tmp_path)
+    result = load_rosters_or_warn()
+    assert result == {}
+    err = capsys.readouterr().err
+    assert "no cached position/team data" in err
+    assert "ingest/nba_rosters.py" in err
+
+
+def test_load_rosters_or_warn_quiet_suppresses_the_notice(monkeypatch, tmp_path, capsys):
+    _empty_cache(monkeypatch, tmp_path)
+    assert load_rosters_or_warn(quiet=True) == {}
+    assert capsys.readouterr().err == ""
 
 
 # --- attach_positions ---

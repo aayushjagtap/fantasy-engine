@@ -86,8 +86,8 @@ python engine/diagnose.py "Jamal Murray"
 # "repeat last season" baseline).
 python backtest/validate.py
 
-# Player-ID crosswalk spike (name normalization across nba_api / Sleeper).
-python crosswalk/spike.py
+# Player-ID crosswalk: name normalization + override map, nba_api vs Sleeper report.
+python crosswalk/names.py
 ```
 
 Every module above also has a `--selftest` flag (e.g. `python engine/value.py

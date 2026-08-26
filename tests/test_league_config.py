@@ -11,7 +11,7 @@ import os
 import pydantic
 import pytest
 
-from engine.league_config import LeagueConfig, ScoringType, StatCategory, punt_ft_9cat, standard_9cat
+from engine.league_config import LeagueConfig, StatCategory, punt_ft_9cat, standard_9cat
 from engine.value import compute_values
 from tests.fixtures import SIX_PLAYER_FIXTURE
 

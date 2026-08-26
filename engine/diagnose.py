@@ -9,7 +9,7 @@ from engine.value import (
     Z_CAP, AVAIL_ALPHA,
 )
 from engine.league_config import CATEGORY_META, ScoringType
-from crosswalk.spike import normalize_name
+from crosswalk.names import normalize_name
 
 
 def explain(players, config, target_name, min_gp=20, pool_size=None, basis="availability_adjusted",

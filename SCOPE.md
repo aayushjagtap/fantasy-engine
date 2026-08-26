@@ -53,9 +53,19 @@ within v1 — include it only if the core slice lands with time to spare.)*
 
 1. **Reproducible pipeline.** A clean checkout runs end-to-end from raw pull to
    ranked board with a single command.
+   > **Status (2026-08-25): met.** `data/cache/` is committed; `pytest -q`
+   > (122 tests) and every entry point (`python -m cli.board …`,
+   > `python backtest/validate.py`, `engine/*.py`) run fully offline off the
+   > cache, no network attempted. CI (`.github/workflows/tests.yml`) runs the
+   > same on every push.
 2. **Adaptivity proven.** Swapping the config (9-cat → points → punt-FT%)
    re-sorts the board in the expected direction — e.g. a punt-FT% build promotes
    high-volume, low-FT% bigs.
+   > **Status (2026-08-25): met.** `python -m cli.board --compare
+   > leagues/standard_9cat.json leagues/punt_ft.json` puts the low-FT% big
+   > (`giannis_like` in the fixture; real bigs on cached data) in the risers
+   > section; `test_compare_promotes_low_ft_big` locks it. Config is data
+   > (`leagues/*.json`), not code.
 3. **Measured against a baseline.** On a held-out season, the ranking beats the
    chosen baseline on the chosen metric, AND flagged sell-high players regress
    more often than not. Define these up front:
@@ -64,6 +74,20 @@ within v1 — include it only if the core slice lands with time to spare.)*
      end-of-season realized value.
    - **Directional check:** share of sell-high flags whose rest-of-season
      production fell toward their projection.
+   > **Status (2026-08-25): partially met, with an amendment and an open piece.**
+   > *Metric, met but thin:* on the 2025-26 holdout (n = 358) the projection
+   > scores Spearman **0.689** vs **0.679** for the baseline actually
+   > implemented — **naive persistence, not preseason ADP**. That is a
+   > **+0.010** edge; honestly, that is a thin margin, roughly the width of the
+   > role-trend ablation itself (+0.013 ON vs OFF), and well short of a
+   > decisive result.
+   > *Baseline, amended:* preseason ADP was never ingested (the Sleeper/ADP
+   > stretch stayed out of v1). `backtest/validate.py` uses naive persistence
+   > instead. Treat the baseline as amended to "DARKO-naive / last-season
+   > persistence"; pulling real ADP is still the honest bar and remains open
+   > (see `BUILD_PLAN.md` → Still open).
+   > *Directional check: not done.* Sell-high/buy-low is M5, not started — no
+   > flags exist to test regression against yet.
 
 The backtest is the resume-critical piece — "I built it *and proved it*." It is
 designed in before coding because it dictates what data gets collected.

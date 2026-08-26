@@ -7,20 +7,37 @@ This file defines *what to build next and in what order*.
 
 ## Current state
 
+Updated 2026-08-25. Suite: `pytest -q` → 122 passing, fully offline.
+
 | Milestone | Status |
 |---|---|
-| M0 crosswalk spike | Done (`crosswalk/spike.py`). No override map file exists yet. |
+| M0 crosswalk spike | Done. Now `crosswalk/names.py` (renamed from `spike.py`) with `overrides.json` + `resolve()` — C5. |
 | M0.5 DARKO decision | Done (`DARKO_NOTES.md`). DARKO = benchmark, not dependency. |
 | M1 ingest | Done (`ingest/nba_boxscores.py`). Season lines, not game logs. |
-| M2 config | Done (`engine/league_config.py`). Hardcoded constructors only. |
-| M3 value engine | Done (`engine/value.py`) + `engine/diagnose.py` (bonus). |
-| Projection | Done (`engine/projection.py`). Not in original milestone list. |
-| M4 draft board CLI | **Missing.** No `cli/`, no CSV output. |
-| M5 buy-low / sell-high | **Missing.** |
-| M6 backtest | Done (`backtest/validate.py`), with a role-trend ablation. |
+| M2 config | Done. Constructors kept as fixtures; leagues are files now — B1. |
+| M3 value engine | Done (`engine/value.py`) + `engine/diagnose.py`. `SCALE_FIELDS` bug fixed — A3. |
+| Projection | Done (`engine/projection.py`). Recency-weighted, age-curved, role-trend. |
+| M4 draft board CLI | Done (`cli/board.py`) — B2. Dual-lens board, `--explain`, `--compare`, `--role-audit`, CSV. |
+| M5 buy-low / sell-high | **Not started.** In-season feature; needs 2026-27 data. |
+| M6 backtest | Done (`backtest/validate.py`). Single-population fix + role-trend ablation — A4. |
 
-Also missing: `requirements.txt`, `README.md`, any test runner, the
-`crosswalk/` override map, and any way to define a league without editing Python.
+| Phase B/C item | Status |
+|---|---|
+| A1 packaging + README | Done. `requirements.txt`, `README.md`, `.github/workflows/tests.yml`. |
+| A2 real test suite | Done. `tests/` under pytest; `--selftest` flags kept as thin wrappers. |
+| A3 `SCALE_FIELDS` incomplete | Done. `fgm`/`ftm`/`min` added + regression test. |
+| A4 backtest mismatched populations | Done. `_score_predictors` computes one intersection, prints N. |
+| A5 `basis="total"` misnomer | Done. Renamed **availability-adjusted**; `"total"` kept as an alias. |
+| B1 config as data | Done. `LeagueConfig.load/save`, `leagues/*.json` (5 examples). |
+| B2 the CLI | Done. `python -m cli.board`. |
+| C1 ingest positions/teams | Done (`ingest/nba_rosters.py`, `CommonTeamRoster`, per-team disk cache). |
+| C2 position-aware replacement | Done. `REPLACEMENT_MODES` = flat / hybrid / strict; **flat stays default** (see Decisions). |
+| C3 rookies | Done. `data/rookies_2026.json`, merged flagged `is_rookie`, excluded from backtest. |
+| C4 role overrides | Done. `data/role_overrides.json`, applied after `_role_trend_mult`, shown in `--explain`. |
+| C5 crosswalk override map | Done. `crosswalk/overrides.json` (ships empty) + `load_overrides()`/`resolve()`; `names.py` no longer a spike. |
+
+Still deferred (out of scope this pass): M5, Phase D (`engine/team.py`, trade
+analyzer, draft assistant), the Sleeper/ADP stretch.
 
 ---
 
@@ -35,8 +52,8 @@ Also missing: `requirements.txt`, `README.md`, any test runner, the
 
 **Date logic is already correct** and needs no change: as of today
 `recent_completed_seasons(3)` → `["2025-26", "2024-25", "2023-24"]` and
-`_next_season_label("2025-26")` → `"2026-27"`. Add a test pinning this to today's
-date so it can't silently drift.
+`_next_season_label("2025-26")` → `"2026-27"`. Pinned against drift by
+`test_recent_completed_seasons_pinned_to_2026_08_11` (A2).
 
 ---
 
@@ -194,10 +211,16 @@ Add `data/role_overrides.json` — `{nba_id: multiplier}`, hand-edited, applied
 after `_role_trend_mult`, printed in `--explain` output so an override is never
 silent. Same escape-hatch philosophy as the crosswalk override map.
 
-### C5. Ship the crosswalk override map
-`crosswalk/spike.py` recommends a `{normalized_key -> canonical_id}` override
-file that doesn't exist. Create it (even if nearly empty) and load it in the
-normalizer, so the spike becomes a real module rather than a one-off script.
+### C5. Ship the crosswalk override map — DONE (2026-08-25)
+`crosswalk/spike.py` → `crosswalk/names.py` (git-renamed; the "spike" framing is
+gone). `crosswalk/overrides.json` ships with an empty `overrides: {}` and a
+`_comment` documenting its two jobs: cross-source spelling gaps, and the
+suffix-collision case (`normalize_name` strips Jr./Sr./II–V, so two distinct
+active players differing only by a suffix collapse onto one key). `load_overrides()`
++ `resolve(name, key_map, overrides)` return `override` / `ok` / `collision` /
+`miss`; `run()` now scans the whole active pool for colliding keys and prints
+them loudly (empty as of the last run — no override entries needed yet).
+`normalize_name()` stays pure; overrides are a `resolve()`-layer concern.
 
 ---
 
@@ -236,17 +259,66 @@ relative to the league. Then:
 
 ---
 
-## Open decisions to make before Phase C
+## Decisions (recorded)
 
-1. Replacement baseline: flat, per-position, or hybrid? (See C2.)
-2. Is the Sleeper/ADP stretch in v1? It's the natural baseline for Success Gate
-   #3 — `SCOPE.md` names preseason ADP as the baseline, but `validate.py`
-   currently uses naive persistence instead. Either pull ADP or amend the gate.
-3. Which season is the backtest holdout? Currently defaults to the latest
-   completed season (2025-26).
-4. How many seasons of history? Currently 3 via `RECENCY_WEIGHTS`;
-   `SCOPE.md` proposed 3-5.
-5. Route decision: D-first or E-first (see Phase D).
+Everything here is settled and reflected in the code. Numbers are from the
+committed offline cache; reproduce with `python backtest/validate.py` and the
+sweep scripts noted.
+
+### a. History window: 3 seasons, `AVAIL_ALPHA = 0.5`
+Swept history length 3 / 4 / 5 × `avail_alpha` 0.3 / 0.5 / 0.7 against 2025-26
+(n = 370). Spearman is **monotonic in both knobs**: fewer seasons is better at
+*every* alpha. Going 3 → 5 seasons costs −0.0135 Spearman. Kept `RECENCY_WEIGHTS`
+at 3 entries and `AVAIL_ALPHA = 0.5`. (See the post-C1 idea at the end of this
+file: the 3-season limit is right for the box-score *average* but arbitrary for
+slow-moving durability/role traits — decoupling those windows is a later item,
+not a change to this decision.)
+
+### b. `Z_CAP` stays 3.0
+Swept the cap from 2.5 through uncapped. Across that whole range only one player
+moves materially: Giannis Antetokounmpo, #50 → #94 as the cap loosens, because
+uncapped his FT% drag outweighs his FG% credit. Everyone else is stable. No
+reason to move off 3.0.
+
+### c. Flat replacement stays the default
+`replacement_mode=hybrid` moved Spearman **+0.000** on all three predictors
+(naive / role-trend OFF / ON) in the A4 backtest with real position data on hand
+(n = 358). It also *mildly penalizes centers*: the current pool has ~113
+C-eligible vs ~301 G-eligible players (verified against the roster cache:
+C = 113, G = 301) competing for ~12 C vs ~36 G starter slots in a 12-team
+league, so the replacement *percentile* lands at a comparable depth for both —
+hybrid removes almost none of the center scarcity it was meant to capture while
+adding a knob.
+`flat` remains the default and the number the recorded backtest is measured on;
+`hybrid` / `strict` stay available via `--replacement`.
+
+### d. Post-A4 backtest baseline (2025-26 holdout, n = 358)
+`python backtest/validate.py`:
+
+| predictor | Spearman |
+|---|---|
+| naive persistence (repeat last season) | 0.679 |
+| ours, role-trend OFF | 0.676 |
+| ours, role-trend ON | 0.689 |
+
+Role-trend adds +0.013 over OFF, +0.010 over naive. Top-30 hit rate: 15/30 of
+our projected top 30 finished top 30. `hybrid` reproduces all three to ±0.000.
+
+**The pre-A4 commit messages cite older, non-comparable numbers.** `4e09194`
+("0.679 → 0.687") and `4d41e1a` ("adds +0.011 / +0.017") were measured before
+`_score_predictors` computed a single common population — each predictor was
+scored on its own intersection with actuals and then differenced, so those
+deltas are apples-to-oranges. Trust the table above, not those messages.
+
+## Still open
+
+1. **Sleeper/ADP** for Success Gate #3. `SCOPE.md` names preseason ADP as the
+   baseline; `validate.py` uses naive persistence. Either pull ADP or formally
+   amend the gate — see `SCOPE.md`'s gate-3 status line. Unresolved.
+2. **Backtest holdout**: defaults to the latest completed season (2025-26).
+   Fine for now; revisit once 2026-27 actuals exist.
+3. **Route decision**: D-first or E-first for Phase D (see above). Unresolved —
+   out of scope until M5 work starts.
 
 ---
 

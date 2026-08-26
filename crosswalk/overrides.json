@@ -1,0 +1,11 @@
+{
+  "_comment": [
+    "C5 -- hand-written {normalized_key -> canonical nba_id} map. crosswalk/names.normalize_name() drops accents, punctuation and generational suffixes to make one match key per player; load_overrides() reads this file and resolve() consults it BEFORE the automatic per-source lookup. A missing/empty file changes nothing -- entries exist only to fix cases automatic matching gets wrong.",
+    "TWO failure modes this file is for:",
+    "  1. Cross-source spelling gaps -- a player whose nba_api / Sleeper / DARKO spellings differ so much that normalization still doesn't bridge them (name changes, transliteration differences, data-entry typos at the source). Pin the normalized key to the correct nba person id.",
+    "  2. Suffix collisions -- normalize_name() strips Jr./Sr./II/III, so two DIFFERENT active players whose names differ ONLY by a generational suffix collapse onto one key (e.g. an active 'Gary Payton' and 'Gary Payton II', or a father/son pair both in the league). resolve() then returns status 'collision' and cannot pick one; the entry here names the canonical id for that key. Run `python crosswalk/names.py` -- its suffix-collision scan lists every colliding key in the current active-player pool, which is the shortlist for this file. As of the last run that scan came back EMPTY (no colliding keys in the active pool), so there are no suffix entries yet; add them if the scan ever reports one.",
+    "Keys are written as display names for readability and re-normalized on load, so 'Luka Doncic' and 'lukadoncic' are equivalent here. Values are integer nba_api person ids. Keys starting with '_' are ignored. Put rationale in _notes (key -> free text)."
+  ],
+  "_notes": {},
+  "overrides": {}
+}
