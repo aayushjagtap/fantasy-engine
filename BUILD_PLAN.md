@@ -38,11 +38,12 @@ Updated 2026-08-26. Suite: `pytest -q` → 165 passing, fully offline.
 
 | Phase D item | Status |
 |---|---|
-| E1 `engine/team.py` — roster state | Done (2026-08-26). `Team` object: per-category `category_totals` (ratio cats volume-weighted), `standing` (z vs a synthetic-team baseline drawn from the draft pool, size-prorated for mid-draft use), `expected_category_wins` / `marginal_value` (the draft-assistant primitive — exact recompute, diminishing returns fall out of the win-prob sigmoid), `detect_punts` (inferred, never written back to config), `player_breakdown` (reuses `diagnose.category_contributions`). New `LeagueConfig.matchup_format` (`h2h` default / `roto`). |
+| E1 `engine/team.py` — roster state | Done (2026-08-26). `Team` object: per-category `category_totals` (ratio cats volume-weighted), `standing` (z vs a synthetic-team baseline drawn from the draft pool, size-prorated for mid-draft use), `expected_category_wins` / `marginal_value` (the draft-assistant primitive — exact recompute, diminishing returns fall out of the win-prob sigmoid), `detect_punts` (inferred, never written back to config), `player_breakdown` (reuses `diagnose.category_contributions`). New `LeagueConfig.matchup_format` (`h2h` default / `roto`). **Revised 2026-08-26** (E2 prep — see Decision f revision): `standing()` no longer clamps `z`; proration is true first-`k`-picks; `marginal_value` delta documented as ranking-only. |
+| E2 `engine/draft.py` — draft assistant (engine half) | Done (2026-08-26). `recommend(team, players, available_ids)` ranks candidates by a blend of `marginal_value` and raw VOR: `w_mv = clamp(k / starter_slots, 0, 1)` (thin roster → trust VOR, full starters → trust marginal). `legal_additions` = full bipartite match of roster + candidate into slots (G/F/C granularity only — CommonTeamRoster has no PG/SG split; gate disables when no position data). `positional_pressure` (demand/supply per G/F/C over the remaining pool) is **reported, not applied** — `scarcity_lambda` defaults to 0.0; it, the blend curve, and the relevance window are unvalidated pending a draft sim. Output carries the full `marginal_value` dict + which inferred punts each pick respects/pushes + slot fit. VOR term uses the config-default (flat) replacement, not strict (Decision c). |
 
-Still deferred (out of scope this pass): the rest of M5 (game-log ingest —
-see Phase D), the trade analyzer and draft assistant (next session — both
-consume `engine/team.py`), the Sleeper/ADP stretch.
+Still deferred: **`cli/draft.py`** (the front door for E2 — next session), the
+trade analyzer (also consumes `engine/team.py`), the rest of M5 (game-log
+ingest — see Phase D), the Sleeper/ADP stretch.
 
 ---
 
@@ -302,9 +303,9 @@ presenting it as a gate-3 result would overclaim.
   mean and spread across `num_teams` synthetic rosters partitioned from the
   top `num_teams * roster_slots` of the value board (`baseline_method="snake"`
   default, `"random"` fixed-seed available). Counting-cat baseline is prorated
-  by `roster_size / roster_slots` so `standing`/`detect_punts` mean something
-  mid-draft, not only at a full roster. `z` is capped at `Z_CAP`,
-  `win_prob = Phi(z / sqrt(2))`.
+  to the synthetic teams' first-`k` picks so `standing`/`detect_punts` mean
+  something mid-draft, not only at a full roster. `win_prob = Phi(z / sqrt(2))`;
+  `z` is **not** capped (see Decision f revision — Phi already bounds it).
 - `expected_category_wins` / `marginal_value` — the objective and the
   draft-assistant primitive. Exact recompute against a fixed baseline;
   diminishing returns are emergent from the sigmoid (a third elite blocker on
@@ -316,10 +317,12 @@ presenting it as a gate-3 result would overclaim.
 - `player_breakdown` — per rostered player, `diagnose.category_contributions`
   reused verbatim (no re-derived z math).
 
-Design answers recorded under Decisions (e, f). Next session builds the
-draft assistant and trade analyzer on top of this. Original E1 notes:
+Design answers recorded under Decisions (e, f). The draft-assistant engine
+(`engine/draft.py`) is now built on top of this (E2, 2026-08-26); its CLI and
+the trade analyzer are still to come. Original E1 notes:
 - **Draft assistant:** given my roster + available players, who most improves my
-  weakest *contested* categories? (Marginal value, not raw VOR.)
+  weakest *contested* categories? (Marginal value, not raw VOR.) — done as
+  `engine/draft.recommend`; CLI pending.
 - **Trade analyzer:** a trade cannot be evaluated by summing VOR in a category
   league. A third elite shot-blocker is worth less to a team already winning
   blocks; a punt-FT% team should happily give away a 90% free-throw shooter.
@@ -413,6 +416,28 @@ thin-volume FT% — toward a coin flip; roto barely feels it). Not built:
 - **`basis` defaults to `availability_adjusted`**, matching `compute_values`, so
   board rank and marginal value are read on one basis. `per_game` overridable.
 
+**Revised 2026-08-26 (E2 prep — four corrections to E1):**
+1. *Snake bias is category-split, not blanket.* On the committed pool snake
+   `sigma_c` runs *above* random for `stl/blk/fg3m/fg_pct`; it compresses only
+   the value-correlated cats (`pts/reb/ast/tov/ft_pct`). Docstrings reworded.
+2. *Proration is now true first-k, not linear.* `standing()` compares a
+   `k`-roster to the synthetic teams' actual first `k` picks
+   (`Team._prorated_baseline(k)`), falling back to the full-team baseline once
+   `k` reaches the synthetic team size. The old `k / roster_slots` scaling
+   overstated every partial roster (a five-big roster read `pts z = +1.25`;
+   first-k puts it negative).
+3. *`Z_CAP` removed from `standing()`* (`z_cap` now defaults to `None`). Phi
+   already bounds the objective in `[0,1]`, so the cap only destroyed gradient
+   — under it ~5–6 of 9 categories pinned at `±3` and `marginal_value`
+   returned *exactly* 0 in each, deciding picks on the survivors. Uncapped `z`
+   of `-5` → `P(win) ~ 0.0002` is honest over-confidence from the compressed
+   `sigma_c`; the real fix is `tau_c`. The draftable-pool selection and
+   `player_breakdown()` keep `Z_CAP` (summed-z board contexts).
+4. *`marginal_value`'s delta* is documented as valid only for ranking at a
+   fixed roster size — not comparable across sizes, not an absolute
+   category-win count (pinning both endpoints to the post-move size
+   under-credits "before").
+
 ## Still open
 
 1. **Sleeper/ADP** for Success Gate #3. `SCOPE.md` names preseason ADP as the
@@ -421,8 +446,13 @@ thin-volume FT% — toward a coin flip; roto barely feels it). Not built:
 2. **Backtest holdout**: defaults to the latest completed season (2025-26).
    Fine for now; revisit once 2026-27 actuals exist.
 3. **Route decision**: resolved E-first. M5's ranked-list half (the
-   projection-divergence report) shipped, then `engine/team.py` (E1, done
-   2026-08-26). Next: draft assistant + trade analyzer on top of `Team`.
+   projection-divergence report) shipped, then `engine/team.py` (E1) and the
+   draft-assistant engine `engine/draft.py` (E2 engine half), both 2026-08-26.
+   Next: `cli/draft.py`, then the trade analyzer.
+5. **Draft-assistant unvalidated constants**: the blend curve `w_mv = k /
+   starter_slots`, `scarcity_lambda` (default 0.0 — off), and the scarcity
+   relevance window are all reasoned, not fit. A draft simulation would let
+   them be swept; until then scarcity is reported but not applied.
 4. **Game-log ingest for real M5 + gate-3 directional check.** Both are blocked
    on per-game data that doesn't exist until 2026-27 opening night (Oct 20,
    2026). See "M5" under Phase D for the exact endpoints. Not startable now.

@@ -45,23 +45,46 @@ category. It is derived from the draftable pool, not hardcoded:
      deviation across the num_teams synthetic totals. That (mu_c, sigma_c) pair
      is the league baseline for category c.
 
-BIAS NOTE. Snake-dealing a value-ordered pool makes every synthetic team a
-near-identical tier mix, which understates sigma_c relative to a real league
-containing punt builds and lopsided rosters. A smaller sigma_c inflates every
-|z| this object reports (and therefore the magnitude of marginal values).
-"random" spreads teams out more and is a looser lower bound on sigma_c; a real
-league is looser still. _demo() prints sigma_c under both methods so the
-sensitivity is visible. Treat standing z-scores as ordinally trustworthy and
-their absolute magnitude as an overestimate.
+BIAS NOTE. Snake-dealing a value-ordered pool gives every synthetic team a
+near-identical tier mix. For the VALUE-CORRELATED categories (pts, reb, ast,
+tov, ft_pct) that compresses sigma_c below what a real league of punt builds
+and lopsided rosters would show, so |z| and marginal-value magnitudes there
+run high. It does NOT systematically compress the specialist categories: on
+the committed pool _demo() reports snake sigma_c ABOVE random for stl, blk,
+fg3m and fg_pct (a random deal happens to clump those more). So the bias is
+"snake compresses value-correlated categories," not a blanket inflation of
+every z. "random" (fixed seed) is available; _demo() prints both. Treat
+standing z as ordinally trustworthy and its magnitude as approximate.
 
-MID-DRAFT PRORATION. A partial roster holds fewer players than a complete
-synthetic team, so its counting-stat totals are not comparable to a full team's.
-standing() scales the counting-cat baseline (mean and std) by
-current_roster_size / total_roster_slots -- so it reads as "am I on pace for the
-picks I've spent," and detect_punts() is meaningful before the draft is over.
-Ratio cats are rates and are not scaled. marginal_value() pins both of its
-endpoints to one proration size (the post-move roster size) so the delta is the
-player, not a moving yardstick.
+NO Z-CAP. standing() does not clamp z (z_cap defaults to None). compute_values
+caps per-category z at Z_CAP=3.0 because it SUMS them into one number where an
+outlier would dominate the total (Decision b validated 3.0 for that). Here z
+is fed through Phi, bounded [0, 1] by construction -- nothing to dominate --
+so the cap only destroys gradient: on a lopsided roster ~5-6 of 9 categories
+pin at +/-3, and marginal_value then returns EXACTLY 0.000 in every pinned
+category, deciding recommendations on the two or three that escaped. The cost
+of dropping the cap is visible overconfidence: an uncapped z of -5 -> P(win)
+~ 0.0002 is not a credible probability, it is the snake-compressed sigma_c
+showing through. That is the honest picture; the cap hid it rather than fixing
+it. The real fix is a per-category matchup variance tau_c from game logs (see
+THE OBJECTIVE), not available until 2026-27 is underway. Pass z_cap=<float> to
+restore clamping. The draftable-pool selection and player_breakdown() keep
+Z_CAP -- those are summed-z board contexts, not probabilities.
+
+MID-DRAFT PRORATION. A k-player roster is not comparable to a complete
+synthetic team. standing() compares it to the synthetic teams' own first k
+picks: each synthetic team is dealt in value order, so its first k entries ARE
+its k best picks, and _prorated_baseline(k) takes (mean, std) of those first-k
+totals per counting category. This replaces the old linear "k / total_slots of
+a full team" scaling, which understated the yardstick -- your first k picks
+are your best k, not a flat fraction of a whole roster -- and so overstated
+every mid-draft roster (a five-big roster read pts z = +1.25 against 5/12 of a
+team; against real first-5-picks it is negative). Linear scaling is not used;
+_prorated_baseline falls back to the full-team baseline once k reaches the
+synthetic team size. Ratio cats are rates and are not prorated. marginal_value()
+pins both endpoints to one size (the post-move roster size) so the delta is
+the player, not a moving yardstick -- see its docstring for what that does and
+does not mean.
 
 THE OBJECTIVE, and h2h vs roto.
 For category c, model this roster's total and a typical opponent's total as two
@@ -192,17 +215,20 @@ class Team:
     pool_size : int | None
         Size of the draftable pool the baseline is built from. Defaults to
         num_teams * (sum of roster slot counts), matching compute_values.
-    z_cap : float
-        Standings z-scores are clamped to +/- this (default Z_CAP = 3.0), as
-        elsewhere in the engine -- keeps a degenerate sigma from producing an
-        absurd win probability.
+    z_cap : float | None
+        If set, standing()'s z is clamped to +/- this. Defaults to None (no
+        clamp): standing z is fed through Phi, bounded [0, 1], so the cap
+        compute_values needs for its SUMMED z has no analogue here and only
+        destroys gradient (see the module docstring's NO Z-CAP note). The
+        draftable-pool selection and player_breakdown() always use Z_CAP --
+        those are summed-z board contexts, not probabilities.
     baseline_method : str
         "snake" (default) or "random"; see the module docstring's BIAS NOTE.
     """
 
     def __init__(self, config, players: dict, roster_ids=(), *, min_gp: int = 20,
                  basis: str = "availability_adjusted", pool_size: int | None = None,
-                 z_cap: float = Z_CAP, avail_alpha: float = AVAIL_ALPHA,
+                 z_cap: float | None = None, avail_alpha: float = AVAIL_ALPHA,
                  baseline_method: str = "snake"):
         if config.scoring_type is ScoringType.POINTS:
             raise ValueError(
@@ -216,9 +242,9 @@ class Team:
         self.config = config
         self.min_gp = min_gp
         self.basis = basis
+        self.avail_alpha = avail_alpha          # public: engine/draft.py reads it
         self.baseline_method = baseline_method
         self._z_cap = z_cap
-        self._avail_alpha = avail_alpha
 
         self.roster_ids: set = set(roster_ids)
 
@@ -233,11 +259,16 @@ class Team:
         if pool_size is None:
             pool_size = config.num_teams * slots_per_team
         self.pool_size = max(1, min(pool_size, len(self._scaled)))
-        self._pool_ids = _draft_pool_ids(self._scaled, config, self.pool_size, z_cap)
+        # The draftable pool is ranked by SUMMED weighted z (board math), so it
+        # keeps Z_CAP regardless of self._z_cap -- see the NO Z-CAP note.
+        self._pool_ids = _draft_pool_ids(self._scaled, config, self.pool_size, Z_CAP)
 
-        # Lazy {cat: (mu, sigma)}; depends only on the pool, so adding/removing a
-        # rostered player never invalidates it.
+        # All lazy and pool-level, so adding/removing a rostered player never
+        # invalidates them: full-team baseline {cat: (mu, sigma)}, the snake/
+        # random synthetic partition, and per-k first-k-picks baselines.
         self._baseline: dict | None = None
+        self._syn_teams: list[list] | None = None
+        self._prorated_cache: dict[int, dict] = {}
 
     # -- roster mutation ---------------------------------------------------- #
 
@@ -252,7 +283,16 @@ class Team:
     # -- the league baseline --------------------------------------------------- #
 
     def _synthetic_teams(self) -> list[list]:
-        """num_teams synthetic rosters partitioned from the top of the pool."""
+        """num_teams synthetic rosters partitioned from the top of the pool.
+
+        Each returned list is in DEAL ORDER -- so team[:k] is that synthetic
+        team's first k picks, which _prorated_baseline() relies on. Both deal
+        methods below preserve this: snake walks the value-sorted pool, random
+        walks a fixed-seed shuffle, and both round-robin so the earliest
+        entries a team receives are its best. Do not reorder these lists.
+        """
+        if self._syn_teams is not None:
+            return self._syn_teams
         n = self.config.num_teams
         take = list(self._pool_ids[: n * self._slots_per_team])
         teams: list[list] = [[] for _ in range(n)]
@@ -265,10 +305,13 @@ class Team:
             for idx, pid in enumerate(take):
                 rnd, slot = divmod(idx, n)
                 teams[slot if rnd % 2 == 0 else n - 1 - slot].append(pid)
+        self._syn_teams = teams
         return teams
 
     def league_baseline(self) -> dict:
-        """{StatCategory: (mean, std)} across the num_teams synthetic rosters."""
+        """{StatCategory: (mean, std)} across the num_teams synthetic rosters,
+        each at its FULL size. This is the reference for a complete roster;
+        standing() uses _prorated_baseline(k) for a k-player roster."""
         if self._baseline is None:
             teams = self._synthetic_teams()
             self._baseline = {}
@@ -276,6 +319,35 @@ class Team:
                 totals = [_team_cat_total(self._scaled, t, cat) for t in teams]
                 self._baseline[cat] = _mean_std(totals)
         return self._baseline
+
+    def _prorated_baseline(self, n_slots: int) -> dict:
+        """{StatCategory: (mean, std)} for a roster of n_slots players.
+
+        Counting cats: (mean, std) of each synthetic team's FIRST-n_slots-picks
+        total. The synthetic pool is dealt in value order, so a team's first
+        n_slots entries are its n_slots best picks -- the honest yardstick for
+        a partial roster, and materially higher than a linear n_slots/team_size
+        slice of a full team (your early picks are your best). Ratio cats: the
+        full-team baseline, unchanged (a percentage is not a running total).
+        Falls back to the full-team baseline for every category once n_slots
+        reaches the synthetic team size (nothing left to truncate), and for
+        n_slots <= 0 (an empty roster has no standing anyway).
+        """
+        full = self.league_baseline()
+        teams = self._synthetic_teams()
+        team_size = max((len(t) for t in teams), default=0)
+        if n_slots <= 0 or n_slots >= team_size:
+            return full
+        if n_slots not in self._prorated_cache:
+            b = {}
+            for cat in self.config.active_categories:
+                if CATEGORY_META[cat].is_ratio:
+                    b[cat] = full[cat]
+                else:
+                    totals = [_team_cat_total(self._scaled, t[:n_slots], cat) for t in teams]
+                    b[cat] = _mean_std(totals)
+            self._prorated_cache[n_slots] = b
+        return self._prorated_cache[n_slots]
 
     # -- this roster's standing --------------------------------------------- #
 
@@ -293,40 +365,33 @@ class Team:
         """{StatCategory: {total, league_mean, league_std, z, win_prob}}.
 
         z is (total - mean) / std against the synthetic-team distribution,
-        sign-flipped so + always means "winning the category", clamped to
-        +/- z_cap. win_prob is Phi(z / sqrt(2)).
+        sign-flipped so + always means "winning the category". NOT clamped by
+        default (z_cap=None; see the class docstring's NO Z-CAP note). win_prob
+        is Phi(z / sqrt(2)).
 
-        PRORATION. A roster mid-draft holds fewer players than a complete
-        synthetic team, so its counting-stat totals are not comparable to a full
-        team's. The counting-cat baseline (mean and std) is therefore scaled by
-        n_slots / total_roster_slots, where n_slots defaults to the current
-        roster size (pass prorate_to to pin it -- marginal_value does, so its two
-        endpoints share one yardstick). standing() then reads as "am I on pace,
-        given how many picks I've made." Ratio cats (FG%, FT%) are rates and are
-        NOT scaled. An empty roster (n_slots == 0) has no standing: every z is 0.
-
-        (A sharper baseline would compare your first k picks to the synthetic
-        teams' first k picks rather than to a linear k/N slice of a full team;
-        linear proration is the v1 choice -- simple and adequate for the draft
-        assistant. See BUILD_PLAN.md.)
+        PRORATION. A k-player roster is compared to the synthetic teams' own
+        first k picks (value-ordered) via _prorated_baseline(k) -- not to a
+        linear k/total-slots slice of a full team, which understated the bar
+        and overstated every partial roster. n_slots defaults to the current
+        roster size; pass prorate_to to pin it (marginal_value does, so its two
+        endpoints share one yardstick). Ratio cats (FG%, FT%) are rates and are
+        NOT prorated. An empty roster (n_slots == 0) has no standing: every z
+        is 0.
         """
         ids = self._roster_ids_with(extra_ids, drop_ids)
         n_slots = len(ids) if prorate_to is None else prorate_to
-        frac = n_slots / self._slots_per_team if self._slots_per_team else 0.0
-        base = self.league_baseline()
+        base = self._prorated_baseline(n_slots)
         totals = self.category_totals(extra_ids=extra_ids, drop_ids=drop_ids)
         out = {}
         for cat in self.config.active_categories:
             mu, sigma = base[cat]
-            if not CATEGORY_META[cat].is_ratio:      # counting cats scale with roster size
-                mu, sigma = mu * frac, sigma * frac
             if n_slots <= 0:
                 z = 0.0
             else:
                 raw = (totals[cat] - mu) / sigma if sigma else 0.0
                 if not CATEGORY_META[cat].higher_is_better:
                     raw = -raw
-                z = max(-self._z_cap, min(self._z_cap, raw))
+                z = raw if self._z_cap is None else max(-self._z_cap, min(self._z_cap, raw))
             out[cat] = {
                 "total": totals[cat],
                 "league_mean": mu,
@@ -347,6 +412,12 @@ class Team:
             raise ValueError(f"units must be one of {UNITS}, got {units!r}")
         return units
 
+    def resolve_units(self, units=None) -> str:
+        """Public: fill units in from config.matchup_format when None, and
+        validate. engine/draft.py calls this so it reports in the same units
+        marginal_value() uses."""
+        return self._resolve_units(units)
+
     def _objective_c(self, win_prob: float, units: str) -> float:
         if units == "category_wins":
             return win_prob
@@ -365,8 +436,20 @@ class Team:
             the caller has decided to concede). active_categories already
             excludes configured punts.
         prorate_to : baseline-size override, forwarded to standing().
+
+        Raises ValueError if the effective roster (after extra_ids/drop_ids) is
+        empty: with no players every category is a coin flip and the sum is
+        just n_active/2, a number that means nothing. Rank the first pick with
+        marginal_value() instead (it floors the proration size at 1).
         """
         units = self._resolve_units(units)
+        ids = self._roster_ids_with(extra_ids, drop_ids)
+        if not ids:
+            raise ValueError(
+                "expected_category_wins() is undefined for an empty roster "
+                "(every category would be a coin flip -> n_active/2). Use "
+                "marginal_value() to rank the first pick."
+            )
         ignore = set(ignore_categories)
         st = self.standing(extra_ids=extra_ids, drop_ids=drop_ids, prorate_to=prorate_to)
         return sum(self._objective_c(row["win_prob"], units)
@@ -386,6 +469,15 @@ class Team:
         Both endpoints share one proration yardstick -- the roster's size AFTER
         the move (floored at 1) -- so the delta reflects the player, not a
         shift in the baseline between the two evaluations.
+
+        WHAT THE DELTA IS AND IS NOT. It is valid for RANKING candidates at a
+        fixed roster size -- that is its whole job for the draft assistant. It
+        is NOT comparable across roster sizes, and NOT an absolute number of
+        category wins. Pinning both endpoints to the post-move size means
+        "before" (a k-player roster) is scored against a (k+1)-pick baseline,
+        which under-credits it and inflates every delta -- the demo's "+1.000"
+        top add is that artifact, not a player who wins one whole category.
+        Compare deltas only within one set of candidates evaluated together.
 
         Returns
         -------
@@ -452,11 +544,15 @@ class Team:
         trade analyzer can see which players carry which categories without
         re-deriving the z math. None for a rostered player below min_gp (that
         function's own eligibility rule).
+
+        This is board attribution -- summed z, matching compute_values -- so it
+        uses Z_CAP regardless of this Team's z_cap (which governs only the Phi
+        path in standing()).
         """
         return {
             pid: category_contributions(
                 self._eligible, self.config, pid, min_gp=self.min_gp,
-                basis=self.basis, z_cap=self._z_cap, avail_alpha=self._avail_alpha,
+                basis=self.basis, z_cap=Z_CAP, avail_alpha=self.avail_alpha,
                 pool_ids=self._pool_ids,
             )
             for pid in self.roster_ids
@@ -498,13 +594,16 @@ def _demo() -> None:
         projected[i].get("name") for i in roster))
 
     print(f"\nStanding vs a typical {cfg.num_teams}-team roster's first {len(roster)} "
-          f"picks (snake baseline, counting cats prorated {len(roster)}/{slots}):")
+          f"picks (snake baseline, first-{len(roster)}-picks proration; z uncapped):")
     print(f"  {'cat':<8} {'team':>10} {'lg mean':>10} {'lg std':>10} {'z':>7} {'P(win)':>8}")
     for cat, row in team.standing().items():
         print(f"  {cat.value:<8} {row['total']:>10.2f} {row['league_mean']:>10.2f} "
               f"{row['league_std']:>10.2f} {row['z']:>7.2f} {row['win_prob']:>8.2f}")
+    print("  (|z| past ~3 -> P(win) past ~0.99 / below ~0.01 is not a credible "
+          "probability -- snake-compressed sigma_c; see the NO Z-CAP note)")
 
-    print("\nsigma_c sensitivity -- snake understates spread, inflating |z|:")
+    print("\nsigma_c sensitivity -- snake compresses value-correlated cats "
+          "(pts/reb/ast/tov/ft_pct), not specialists; ratio = random/snake:")
     snake_b = Team(cfg, projected, roster, baseline_method="snake").league_baseline()
     rand_b = Team(cfg, projected, roster, baseline_method="random").league_baseline()
     print(f"  {'cat':<8} {'snake':>10} {'random':>10} {'ratio':>8}")

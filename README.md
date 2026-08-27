@@ -9,9 +9,10 @@ harness. See [`SCOPE.md`](SCOPE.md) for the full v1 scope and success
 criteria, and [`BUILD_PLAN.md`](BUILD_PLAN.md) for what's built vs. what's
 next.
 
-This is currently a set of importable, independently-runnable modules
-(`ingest/`, `crosswalk/`, `engine/`, `backtest/`), not yet a single CLI --
-that's the next milestone (M4 / Phase B in `BUILD_PLAN.md`).
+The engine is a set of importable, independently-runnable modules
+(`ingest/`, `crosswalk/`, `engine/`, `backtest/`); `python -m cli.board` is
+the user-facing front door (ranked board, `--explain`, `--compare`,
+`--divergence`, CSV). See `BUILD_PLAN.md` for what's built vs. next.
 
 ## Install
 
@@ -92,6 +93,11 @@ python engine/divergence.py
 # available players whose marginal value (expected category wins added) is
 # highest for that roster.
 python engine/team.py
+
+# Draft assistant: given that Team and the remaining pool, ranks the next pick
+# by a blend of marginal value and VOR, with roster-slot legality, each pick's
+# per-category effect, and which inferred punts it respects vs pushes.
+python engine/draft.py
 
 # Backtest: projects a held-out season and checks the projection's ranking
 # against what actually happened (Spearman rank correlation vs. a naive
@@ -216,9 +222,17 @@ team.marginal_value(candidate)  # expected category wins added by one more playe
 
 - **"Relative to the league"** is the mean and spread across `num_teams`
   synthetic rosters partitioned from the top of the value board (snake by
-  default). Snake compresses that spread, so standing z-scores are trustworthy
-  in order but overstated in magnitude -- `python engine/team.py` prints the
-  `sigma` under snake vs a random partition so the effect is visible.
+  default). Snake compresses the spread of the *value-correlated* categories
+  (pts/reb/ast/tov/ft_pct) -- not the specialist ones -- so standing z-scores
+  are trustworthy in order but overstated in magnitude there; `python
+  engine/team.py` prints `sigma` under snake vs a random partition so the
+  effect is visible. `standing()` does **not** clamp z (unlike the summed-z
+  board), so an extreme roster can show `z = -5`, `P(win) ~ 0`; that
+  over-confidence is real and reflects the compressed sigma -- the honest fix
+  is per-category matchup variance from game logs, not a cap.
+- **Mid-draft** a `k`-player roster is compared to a typical team's *first `k`
+  picks*, not a linear `k / roster-size` slice -- your early picks are your
+  best, so the linear version flattered every partial roster.
 - **Ratio categories** (FG%, FT%) are aggregated by volume -- total makes over
   total attempts -- never averaged.
 - **h2h vs roto**: `LeagueConfig.matchup_format` (`h2h` default, `roto`
@@ -228,8 +242,37 @@ team.marginal_value(candidate)  # expected category wins added by one more playe
   units. They diverge only with a per-category weekly variance, which needs
   game-log ingest (see `BUILD_PLAN.md`).
 
-The draft assistant and trade analyzer are the next milestone and both build on
-this object.
+## The draft assistant (`engine/draft.py`)
+
+`recommend(team, players, available_ids)` ranks who to draft next for a given
+roster. It is the roster-aware answer, not the static board:
+
+```python
+from engine.draft import recommend
+
+for r in recommend(team, projected_players, still_available, n=10):
+    print(r["name"], r["score"], r["slot_fit"])
+    print(r["marginal"]["per_category"])   # which cats he moves, by how much
+    print(r["punts"])                      # {inferred-punt cat: "respects" | "pushes"}
+```
+
+- **Blend.** Thin rosters carry little signal, so the score blends
+  `marginal_value` with raw VOR: `w_mv = clamp(k / starter_slots, 0, 1)` -- pure
+  VOR at pick 0, pure marginal value once your starters are full. Override with
+  `blend="vor" | "marginal" | <float>`.
+- **Legality.** A candidate is only recommended if the whole roster *plus* that
+  player can be assigned to distinct slots (`legal_additions` -- a real bipartite
+  match, not "is any slot free"). Positions are G/F/C only (CommonTeamRoster has
+  no PG/SG split), so the gate really constrains across the G/F/C boundary and a
+  full bench; a player with no position on file is UTIL/BENCH-only. If no
+  position data is loaded at all, the gate switches off.
+- **Positional scarcity** (`positional_pressure`: demand/supply per G/F/C over
+  the *remaining* pool) is **reported, not applied** -- `scarcity_lambda`
+  defaults to `0.0`. That constant, the blend curve, and the relevance window
+  are reasoned, not fit; they need a draft simulation before they move rankings.
+
+The CLI front door (`cli/draft.py`) and the trade analyzer are still to come;
+both build on `engine/team.py`.
 
 ## Tests
 

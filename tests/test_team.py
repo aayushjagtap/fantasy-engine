@@ -6,6 +6,11 @@ Offline, synthetic fixtures only. Covers:
   * the league baseline == the synthetic-team partition it documents
   * snake vs random baseline give different sigma_c (sensitivity is real)
   * standing z reflects roster shape (stacked category -> positive z)
+  * standing() does not clamp z by default; a float z_cap restores it, and
+    under a cap marginal_value goes exactly 0 in pinned categories
+  * mid-draft proration compares a k-roster to the synthetic teams' first k
+    picks, not a linear k/total-slots slice
+  * expected_category_wins() raises on an empty roster (n_active/2 is meaningless)
   * diminishing returns: the same player is worth less in a category the
     roster already dominates
   * marginal_value is internally consistent (per_category sums to the delta,
@@ -27,8 +32,8 @@ import re
 import pytest
 
 from engine.league_config import (
-    CategorySetting, LeagueConfig, MatchupFormat, RosterSlot, ScoringType,
-    StatCategory, points_league,
+    CATEGORY_META, CategorySetting, LeagueConfig, MatchupFormat, RosterSlot,
+    ScoringType, StatCategory, points_league,
 )
 from engine.team import PUNT_Z, Team, _team_cat_total
 
@@ -198,16 +203,69 @@ def test_empty_roster_has_no_standing_and_first_pick_still_helps():
     assert math.isfinite(mv["delta_expected_wins"])
 
 
+def test_expected_category_wins_raises_on_empty_roster():
+    # n_active/2 (every category a coin flip) is not a meaningful objective value
+    with pytest.raises(ValueError):
+        _team([]).expected_category_wins()
+    with pytest.raises(ValueError):
+        _team([STAR_A]).expected_category_wins(drop_ids=(STAR_A,))
+    # a single real player is fine
+    assert _team([STAR_A]).expected_category_wins() > 0
+
+
 # --------------------------------------------------------------------------- #
-# marginal value: diminishing returns + internal consistency
+# no z-cap on the win-probability path
 # --------------------------------------------------------------------------- #
 
-def test_third_elite_blocker_adds_less_than_first():
-    blk_strong = _team([WALL_A, WALL_B])           # already winning blocks
-    blk_average = _team([MID_A, MID_B])            # mid blocks
-    add_strong = blk_strong.marginal_value(WALL_C)["per_category"][SC.BLK]
-    add_average = blk_average.marginal_value(WALL_C)["per_category"][SC.BLK]
-    assert 0 <= add_strong < add_average           # same player, worth less when stacked
+def test_standing_z_is_uncapped_by_default_and_z_cap_restores_clamp():
+    ids = [WALL_A, WALL_B, WALL_C]                 # three elite reb/blk bigs -> lopsided
+    uncapped = _team(ids).standing()
+    assert max(abs(row["z"]) for row in uncapped.values()) > 3.0
+    capped = Team(_cfg(), POOL, ids, min_gp=1, z_cap=3.0).standing()
+    assert all(abs(row["z"]) <= 3.0 + 1e-9 for row in capped.values())
+
+
+def test_cap_zeroes_marginal_value_in_pinned_categories():
+    """Why the cap is gone: a category pinned at +/-z_cap contributes EXACTLY 0
+    to marginal_value (both endpoints clamp to the same value -> same win_prob),
+    so a capped Team decides recommendations on only the unpinned categories.
+    Uncapped, every category carries gradient."""
+    ids = [WALL_A, WALL_B, WALL_C]
+    capped = Team(_cfg(), POOL, ids, min_gp=1, z_cap=3.0)
+    uncapped = Team(_cfg(), POOL, ids, min_gp=1)                 # z_cap=None default
+    zeros_capped = [c for c, v in capped.marginal_value(MID_A)["per_category"].items() if v == 0.0]
+    zeros_uncapped = [c for c, v in uncapped.marginal_value(MID_A)["per_category"].items() if v == 0.0]
+    assert len(zeros_capped) >= 3                                # cap blinds it to pinned cats
+    assert len(zeros_uncapped) < len(zeros_capped)               # dropping the cap restores gradient
+    assert set(zeros_uncapped) < set(zeros_capped)               # the survivors are a strict subset
+
+
+# --------------------------------------------------------------------------- #
+# mid-draft proration: first-k picks, not a linear slice
+# --------------------------------------------------------------------------- #
+
+def test_proration_uses_synthetic_first_k_not_linear_slice():
+    """A k-player roster is compared to the synthetic teams' first k picks, not a
+    linear k/team-size slice of a full team. Because early picks are the best
+    picks, the first-k mean of a value-correlated category sits ABOVE the linear
+    slice -- which is why a category-stacked partial roster stops reading as an
+    inflated positive z (see the module docstring and the demo's pts flip)."""
+    t = _team([STAR_A, WALL_A])
+    firstk = t._prorated_baseline(2)
+    full = t.league_baseline()
+    team_size = max(len(grp) for grp in t._synthetic_teams())
+
+    # pts is the most value-correlated cat: its first-2-picks mean must exceed
+    # the naive linear slice the old code used.
+    assert firstk[SC.PTS][0] > full[SC.PTS][0] * (2 / team_size)
+    # ratio cats are rates, not prorated -- passed straight through
+    assert firstk[SC.FG_PCT] == full[SC.FG_PCT]
+    assert firstk[SC.FT_PCT] == full[SC.FT_PCT]
+    # it is genuinely a different baseline, not a rescale of the full one
+    assert firstk[SC.PTS] != full[SC.PTS]
+    # once k reaches the synthetic team size there is nothing to truncate
+    assert t._prorated_baseline(team_size) == full
+    assert t._prorated_baseline(team_size + 5) == full
 
 
 def test_marginal_value_sums_and_matches_objective():
