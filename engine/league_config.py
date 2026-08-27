@@ -28,6 +28,21 @@ class ScoringType(str, Enum):
     POINTS = "points"       # a single fantasy-point total
 
 
+class MatchupFormat(str, Enum):
+    """How category standings turn into an objective (category leagues only).
+
+    Only the roster-aware layer (engine/team.py) reads this; the static value
+    engine does not. Under engine/team.py's variance-free model the two formats
+    produce *identical* roster rankings -- expected roto points in a category is
+    an affine transform of the H2H category-win probability -- so this field
+    selects reporting units, not a different optimum. They diverge only once a
+    per-category weekly variance is modeled (needs game logs).
+    """
+
+    H2H = "h2h"      # maximize expected category wins per matchup
+    ROTO = "roto"    # maximize season-long category standings points
+
+
 class StatCategory(str, Enum):
     # Counting categories: raw totals, higher is better unless noted in CATEGORY_META.
     PTS = "pts"
@@ -124,6 +139,10 @@ class LeagueConfig(BaseModel):
     roster: list[RosterSlot] = Field(default_factory=list)
 
     games_per_week: int | None = None   # reserved for in-season features (v2)
+
+    # Category leagues only; read by engine/team.py, ignored by the static value
+    # engine. Defaults to h2h (the common case). See MatchupFormat.
+    matchup_format: MatchupFormat = MatchupFormat.H2H
 
     @model_validator(mode="after")
     def _check_mode_fields(self) -> "LeagueConfig":

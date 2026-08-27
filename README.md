@@ -87,6 +87,12 @@ python engine/diagnose.py "Jamal Murray"
 # says so in its output). Demo runs 2025-26 as a simulated in-season season.
 python engine/divergence.py
 
+# Roster-aware layer: builds a Team from a handful of drafted players and prints
+# its per-category standing relative to the league, inferred punts, and the
+# available players whose marginal value (expected category wins added) is
+# highest for that roster.
+python engine/team.py
+
 # Backtest: projects a held-out season and checks the projection's ranking
 # against what actually happened (Spearman rank correlation vs. a naive
 # "repeat last season" baseline).
@@ -187,6 +193,43 @@ doesn't exist until the 2026-27 season is underway -- see `BUILD_PLAN.md`.
 With no 2026-27 data yet, the demo (`python engine/divergence.py`) runs 2025-26
 as a simulated in-season season: projected from its three prior seasons, versus
 2025-26 actuals.
+
+## The roster-aware layer (`engine/team.py`)
+
+Every board above ranks players against a static pool. In a category league a
+player's value also depends on the roster he is joining -- a third elite
+shot-blocker is worth less to a team already winning blocks, and a punt-FT%
+team should happily give away a 90% free-throw shooter. `Team` makes that
+expressible:
+
+```python
+from engine.league_config import LeagueConfig
+from engine.team import Team
+
+cfg = LeagueConfig.load("leagues/standard_9cat.json")
+team = Team(cfg, projected_players, roster_ids=[1629029, 203999, ...])
+
+team.standing()                 # per-category z + win prob vs a typical league team
+team.detect_punts()             # categories effectively conceded (reported, not applied)
+team.marginal_value(candidate)  # expected category wins added by one more player
+```
+
+- **"Relative to the league"** is the mean and spread across `num_teams`
+  synthetic rosters partitioned from the top of the value board (snake by
+  default). Snake compresses that spread, so standing z-scores are trustworthy
+  in order but overstated in magnitude -- `python engine/team.py` prints the
+  `sigma` under snake vs a random partition so the effect is visible.
+- **Ratio categories** (FG%, FT%) are aggregated by volume -- total makes over
+  total attempts -- never averaged.
+- **h2h vs roto**: `LeagueConfig.matchup_format` (`h2h` default, `roto`
+  available; `leagues/roto_8cat.json` sets it). Under the current variance-free
+  model expected roto points are an affine transform of the h2h category-win
+  probability, so the two rank rosters identically; the field selects reporting
+  units. They diverge only with a per-category weekly variance, which needs
+  game-log ingest (see `BUILD_PLAN.md`).
+
+The draft assistant and trade analyzer are the next milestone and both build on
+this object.
 
 ## Tests
 

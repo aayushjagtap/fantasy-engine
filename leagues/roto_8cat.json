@@ -1,6 +1,7 @@
 {
   "name": "Roto 8-Cat (no TOV)",
   "scoring_type": "category",
+  "matchup_format": "roto",
   "num_teams": 10,
   "categories": {
     "pts": {},

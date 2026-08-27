@@ -7,7 +7,7 @@ This file defines *what to build next and in what order*.
 
 ## Current state
 
-Updated 2026-08-25. Suite: `pytest -q` → 141 passing, fully offline.
+Updated 2026-08-26. Suite: `pytest -q` → 165 passing, fully offline.
 
 | Milestone | Status |
 |---|---|
@@ -36,9 +36,13 @@ Updated 2026-08-25. Suite: `pytest -q` → 141 passing, fully offline.
 | C4 role overrides | Done. `data/role_overrides.json`, applied after `_role_trend_mult`, shown in `--explain`. |
 | C5 crosswalk override map | Done. `crosswalk/overrides.json` (ships empty) + `load_overrides()`/`resolve()`; `names.py` no longer a spike. |
 
+| Phase D item | Status |
+|---|---|
+| E1 `engine/team.py` — roster state | Done (2026-08-26). `Team` object: per-category `category_totals` (ratio cats volume-weighted), `standing` (z vs a synthetic-team baseline drawn from the draft pool, size-prorated for mid-draft use), `expected_category_wins` / `marginal_value` (the draft-assistant primitive — exact recompute, diminishing returns fall out of the win-prob sigmoid), `detect_punts` (inferred, never written back to config), `player_breakdown` (reuses `diagnose.category_contributions`). New `LeagueConfig.matchup_format` (`h2h` default / `roto`). |
+
 Still deferred (out of scope this pass): the rest of M5 (game-log ingest —
-see Phase D), Phase D proper (`engine/team.py`, trade analyzer, draft
-assistant), the Sleeper/ADP stretch.
+see Phase D), the trade analyzer and draft assistant (next session — both
+consume `engine/team.py`), the Sleeper/ADP stretch.
 
 ---
 
@@ -288,9 +292,32 @@ X+1) is computable from the cache but was deliberately not shipped as
 "validation": it still can't isolate regression from projection-miss, so
 presenting it as a gate-3 result would overclaim.
 
-### E1. `engine/team.py` — roster state
-A `Team` object holding drafted players and exposing per-category standing
-relative to the league. Then:
+### E1. `engine/team.py` — roster state  (DONE 2026-08-26)
+
+`Team(config, players, roster_ids)` for a category league. Shipped:
+- `category_totals` — counting cats sum; ratio cats (FG%/FT%) aggregated as
+  `sum(makes) / sum(attempts)`, never averaged (same volume trap
+  `_pool_ratio_pct` solves for the pool).
+- `league_baseline` / `standing` — "relative to the league" is defined as the
+  mean and spread across `num_teams` synthetic rosters partitioned from the
+  top `num_teams * roster_slots` of the value board (`baseline_method="snake"`
+  default, `"random"` fixed-seed available). Counting-cat baseline is prorated
+  by `roster_size / roster_slots` so `standing`/`detect_punts` mean something
+  mid-draft, not only at a full roster. `z` is capped at `Z_CAP`,
+  `win_prob = Phi(z / sqrt(2))`.
+- `expected_category_wins` / `marginal_value` — the objective and the
+  draft-assistant primitive. Exact recompute against a fixed baseline;
+  diminishing returns are emergent from the sigmoid (a third elite blocker on
+  a blocks-strong roster moves `P(win blk)` far less than on an average one —
+  locked by `test_third_elite_blocker_adds_less_than_first` and
+  `test_ft_shooter_worth_less_to_a_punt_ft_roster`).
+- `detect_punts` — categories with `z <= -1.5`, reported as data; the config
+  is never mutated.
+- `player_breakdown` — per rostered player, `diagnose.category_contributions`
+  reused verbatim (no re-derived z math).
+
+Design answers recorded under Decisions (e, f). Next session builds the
+draft assistant and trade analyzer on top of this. Original E1 notes:
 - **Draft assistant:** given my roster + available players, who most improves my
   weakest *contested* categories? (Marginal value, not raw VOR.)
 - **Trade analyzer:** a trade cannot be evaluated by summing VOR in a category
@@ -353,6 +380,39 @@ our projected top 30 finished top 30. `hybrid` reproduces all three to ±0.000.
 scored on its own intersection with actuals and then differenced, so those
 deltas are apples-to-oranges. Trust the table above, not those messages.
 
+### e. E1 objective: one function, `units="category_wins" | "roto_points"`
+
+`LeagueConfig.matchup_format` added (`h2h` default — the common case and where
+roster-aware value diverges most from static VOR; `roto` also supported).
+Under `engine/team.py`'s variance-free model the two are **not** different
+optima: expected roto points in category *c* is
+`1 + (num_teams-1) * Phi(z_c / sqrt(2))`, an affine transform of the H2H
+category-win probability `Phi(z_c / sqrt(2))` with positive slope and a
+constant that cancels in any marginal difference — so both units rank rosters
+identically. `units` therefore selects reporting units, not the math. They
+separate only once a per-category weekly variance `tau_c` is estimable from
+game logs (h2h then compresses high-variance cats — blk, stl, fg3m,
+thin-volume FT% — toward a coin flip; roto barely feels it). Not built:
+`tau_c` needs game-log ingest that doesn't exist until 2026-27 is underway.
+
+### f. E1 league baseline: snake partition, size-prorated, availability-adjusted
+
+- **Baseline = synthetic rosters from the pool.** `num_teams` teams snake-dealt
+  from the value-sorted top `num_teams * roster_slots`; `(mean, std)` per
+  category across them is the league reference. `baseline_method="random"`
+  (fixed seed `20260826`) is available. Snake gives every synthetic team a
+  near-identical tier mix, so it **understates `sigma_c`** vs a real league of
+  punt builds → **inflates every `|z|`**. `random` is a looser lower bound;
+  `_demo()` prints both. Standing z is ordinally trustworthy, its magnitude an
+  overestimate. Documented in the module.
+- **Size proration.** Counting-cat baseline scaled by
+  `roster_size / roster_slots` so a mid-draft roster is compared to a typical
+  team's *first k picks*' worth (linearly approximated), not a full team.
+  Ratio cats unscaled. `marginal_value` pins both endpoints to the post-move
+  size so its delta is the player, not a moving yardstick.
+- **`basis` defaults to `availability_adjusted`**, matching `compute_values`, so
+  board rank and marginal value are read on one basis. `per_game` overridable.
+
 ## Still open
 
 1. **Sleeper/ADP** for Success Gate #3. `SCOPE.md` names preseason ADP as the
@@ -360,9 +420,9 @@ deltas are apples-to-oranges. Trust the table above, not those messages.
    amend the gate — see `SCOPE.md`'s gate-3 status line. Unresolved.
 2. **Backtest holdout**: defaults to the latest completed season (2025-26).
    Fine for now; revisit once 2026-27 actuals exist.
-3. **Route decision**: D-first or E-first for Phase D. M5's ranked-list half
-   (the projection-divergence report) shipped D-first; `engine/team.py` (E1) is
-   still untouched and is the genuinely differentiated object. Recommend E1 next.
+3. **Route decision**: resolved E-first. M5's ranked-list half (the
+   projection-divergence report) shipped, then `engine/team.py` (E1, done
+   2026-08-26). Next: draft assistant + trade analyzer on top of `Team`.
 4. **Game-log ingest for real M5 + gate-3 directional check.** Both are blocked
    on per-game data that doesn't exist until 2026-27 opening night (Oct 20,
    2026). See "M5" under Phase D for the exact endpoints. Not startable now.
