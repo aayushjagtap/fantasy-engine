@@ -380,24 +380,14 @@ def recommend(team, players: dict, available_ids, *, n: int = DEFAULT_RECS,
 # --------------------------------------------------------------------------- #
 
 def _demo() -> None:
-    from ingest.nba_boxscores import get_season_boxscores, recent_completed_seasons
-    from ingest.nba_rosters import attach_positions, load_rosters_or_warn
-    from engine.projection import load_role_overrides, load_rookies, project_players
+    from engine.projection import project_current_roster
     from engine.league_config import standard_9cat
     from engine.value import compute_values
     from engine.team import Team
     from util.console import configure_stdout_utf8
 
     configure_stdout_utf8()
-    seasons = recent_completed_seasons(3)
-    rosters = load_rosters_or_warn()
-    lines = [get_season_boxscores(s)[0] for s in seasons]
-    lines[0] = attach_positions(lines[0], rosters=rosters)
-    from engine.projection import _next_season_label
-    target = _next_season_label(seasons[0])
-    projected, _ = project_players(
-        lines, rookies=load_rookies(target_season=target),
-        role_overrides=load_role_overrides(target_season=target))
+    projected, _aged, _target = project_current_roster()
 
     cfg = standard_9cat()
     board = compute_values(projected, cfg)

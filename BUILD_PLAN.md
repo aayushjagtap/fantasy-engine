@@ -3,8 +3,8 @@
 Written 2026-08-11. Companion to `SCOPE.md` (which defines *what* v1 is).
 This file defines *what to build next and in what order*. 
 
-Updated 2026-10-23. Batch 1 was completed at commit `c95ee54`; the full suite
-passed with 192 tests.
+Updated 2026-10-23. Batch 1 was completed at commit `c95ee54` with 192 tests
+passing. Batch 2 was completed at commit `f1ac432` with 196 tests passing.
 
 ### Batch 1 — correctness cleanup (complete)
 
@@ -30,21 +30,32 @@ responses before cache replacement, and writes cache files atomically. The new
 `python -m cli.roster_audit` report is cache-only and separates upcoming
 current-roster membership, fallback membership, and their merged view. It
 reports team coverage, position gaps, latest-season stats gaps, older cached
-history, and detectable identity conflicts. Focused offline regression tests
-were added; this batch's tests are awaiting the user's run. No live request or
-projection change is part of this batch.
+history, and detectable identity conflicts. This batch was committed and its
+196-test suite passed at `f1ac432`. It made no projection change.
 
-### Upcoming projection coverage work
+### Batch 3 — returning veterans and current-roster eligibility
 
-Returning-veteran projection fallback remains upcoming. `project_players()`
-still iterates only IDs in the newest input stats season; players who missed
-that season but have older cached history are not yet projected. Use the audit
-to verify current roster identity and history first, then design an explicit
-return-from-absence fallback and measure its historical impact.
+The upcoming projection path requires a complete target-season roster cache
+and restricts membership to that snapshot. Current-roster players absent from
+the newest stats season can use cached history from the three most recent
+completed seasons if their last appearance is no more than two missed seasons
+old. Their age advances by the actual season gap; expected games receive a
+named 0.75-per-missed-season availability assumption. The returner history is
+not treated as a consecutive playing-season minutes trend. Roster presence
+does not establish health or playing status. Regression tests are added, with
+results pending the user's run.
+
+Historical projections and the backtest continue using their prior population
+and no future current-roster membership. Because the repository has no
+historically timed roster snapshots, the backtest does not evaluate the new
+returner eligibility policy; no comparable score is claimed.
 
 The verified rookie rebuild also remains upcoming. The current
 `data/rookies_2026.json` contains synthetic negative IDs and null stat lines;
-this batch does not verify rookie identities or create stat projections.
+Batch 3 does not verify rookie identities or create stat projections. Current-
+season actual ingestion and automatic daily stats/roster updates are later
+batches; they must preserve historical season caches and saved preseason
+projection baselines.
 
 ---
 

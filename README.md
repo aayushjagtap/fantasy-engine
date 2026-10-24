@@ -104,8 +104,8 @@ python ingest/nba_boxscores.py
 # Value engine demo: ranks the most recent completed season, std 9-cat then punt-FT%.
 python engine/value.py
 
-# Projection: projects the upcoming season from the last 3 completed seasons,
-# ranks it, and shows the biggest age/role-driven risers and fallers.
+# Projection: uses the latest 3 completed seasons plus the complete upcoming-
+# season roster cache, ranks current-roster eligible players, and shows movers.
 python engine/projection.py
 
 # Per-category explanation for one player (why are they ranked where they are).
@@ -181,8 +181,7 @@ are optional (a missing file changes nothing), and both are surfaced in the
 board so they're never silent.
 
 - **`data/rookies_2026.json`** -- season-scoped incoming draft class.
-  `project_players` only projects players who appeared in the most recent
-  season, so rookies need this separate source. The top-level `season` must
+  Players without NBA statistical history need this separate source. The top-level `season` must
   match the projection target. Entries with complete per-game lines merge in
   flagged `is_rookie` (marked `(R)` on the
   board, an `is_rookie` column in the CSV, excluded from the backtest).
@@ -192,6 +191,37 @@ board so they're never silent.
   projection. `nba_id`s are synthetic negatives until the real ones exist --
   see the file's `_comment` for the lifecycle (purge it once 2026-27 actuals
   are ingested, or players double-count).
+
+## Current-roster projection eligibility
+
+The upcoming board uses the target season's cached `CommonTeamRoster` snapshot
+as the current-membership gate. All team responses must be present and
+non-empty; if the cache is incomplete, the projection command stops with an
+error instead of presenting missing cache entries as confirmed exclusions.
+Fallback-only players do not qualify for the current board. A current-roster
+player with no cached NBA stats is also omitted until a verified statistical
+projection source is available.
+
+Players on the current roster who missed the latest completed stats season can
+be projected from the three most recent cached seasons when their latest NBA
+appearance is no more than two missed seasons before the target. Their age is
+advanced by the actual season gap, and expected games are multiplied by 0.75
+for each missed season (up to two). This is a conservative modeling assumption,
+not an empirically fitted injury estimate. Per-game ability and shooting
+relationships remain based on recorded stats. No minutes trend is extrapolated
+across an absence gap. A roster listing is not evidence of health or playing
+status; `--explain` labels the historical fallback and expected-games factor.
+
+This current eligibility rule is only applied to the upcoming-season board.
+Historical projections and the existing backtest retain their historical
+player-population behavior; no future roster snapshot is used to decide who
+could have been projected then. The backtest has no properly timed historical
+roster snapshots, so its scores do not evaluate this new returner policy.
+
+The next planned work is to verify and rebuild rookie projections, then add
+current-season actual statistics. Automatic daily stats and roster refreshes
+are later work; this batch does not schedule jobs or overwrite historical
+season caches or saved preseason baselines.
 
 - **`data/role_overrides.json`** -- season-scoped `{nba_id: multiplier}`. Its
   `_season` metadata must match the projection target season; mismatched files

@@ -30,6 +30,9 @@ def _print_coverage(title: str, rows: list[dict]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from util.console import configure_stdout_utf8
+
+    configure_stdout_utf8()
     if argv:
         print("Error: this audit is cache-only and takes no options", file=sys.stderr)
         return 2

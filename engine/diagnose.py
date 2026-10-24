@@ -134,6 +134,12 @@ def explain(players, config, target_name, min_gp=20, pool_size=None, basis="avai
             print(f"  role trend multiplier: {eff:.3f}  ({trend}, from minutes trajectory)")
     if p.get("is_rookie"):
         print("  rookie: 2026 draft class -- hand-entered line from data/rookies_2026.json, not a model projection")
+    if p.get("used_returner_fallback"):
+        print(f"  historical fallback: last actual season {p.get('last_actual_season')}; "
+              f"{p.get('missing_seasons')} missing season(s); expected-games adjustment "
+              f"x{p.get('expected_games_adjustment', 1.0):.3f}")
+        print(f"  roster source: {p.get('roster_source')} -- roster membership does not confirm health "
+              "or playing status")
 
     if config.scoring_type is ScoringType.POINTS:
         print(f"{'stat':<8} {'per-game':>9} {'points':>9}")
@@ -189,16 +195,10 @@ if __name__ == "__main__":
         _selftest()
     else:
         # demo path uses the real ingest/projection when run in the repo
-        from ingest.nba_boxscores import get_season_boxscores, recent_completed_seasons
-        from engine.projection import _next_season_label, load_role_overrides, load_rookies, project_players
+        from engine.projection import project_current_roster
         from engine.league_config import standard_9cat
         from util.console import configure_stdout_utf8
         configure_stdout_utf8()
         name = " ".join(a for a in sys.argv[1:] if not a.startswith("-")).strip() or "Jamal Murray"
-        seasons = recent_completed_seasons(3)
-        lines = [get_season_boxscores(s)[0] for s in seasons]
-        target = _next_season_label(seasons[0])
-        projected, _ = project_players(
-            lines, rookies=load_rookies(target_season=target),
-            role_overrides=load_role_overrides(target_season=target))
+        projected, _aged, _target = project_current_roster()
         explain(projected, standard_9cat(), name)

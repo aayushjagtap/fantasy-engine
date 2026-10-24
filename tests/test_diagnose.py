@@ -30,6 +30,21 @@ def test_explain_unknown_player_returns_none():
     assert total is None
 
 
+def test_explain_shows_returner_fallback_and_availability_metadata(capsys):
+    players = {pid: dict(player) for pid, player in SIX_PLAYER_FIXTURE.items()}
+    player = next(p for p in players.values() if p["name"] == "allround")
+    player.update(used_returner_fallback=True, last_actual_season="2024-25",
+                  missing_seasons=1, expected_games_adjustment=0.75,
+                  roster_source="CommonTeamRoster 2026-27")
+    explain(players, standard_9cat(), "allround", min_gp=1, pool_size=6)
+    output = capsys.readouterr().out
+    assert "last actual season 2024-25" in output
+    assert "1 missing season" in output
+    assert "expected-games adjustment x0.750" in output
+    assert "CommonTeamRoster 2026-27" in output
+    assert "does not confirm health" in output
+
+
 # --- B2: accent-insensitive lookup (normalize_name three-tier match) ---
 
 @pytest.mark.parametrize("query", ["Luka Dončić", "Luka Doncic", "luka doncic", "LUKA DONCIC"])

@@ -69,6 +69,11 @@ ROLE_COMPONENTS = [c for c in COMPONENTS if c != "gp"]
 # How much of a minutes trend to extrapolate forward (damped, not blind).
 ROLE_DAMP = 0.4
 
+# Modeling assumptions for players returning after missed seasons; these are
+# conservative availability adjustments, not fitted injury probabilities.
+MAX_RETURN_MISSING_SEASONS = 2
+RETURN_GP_FACTOR_PER_MISSED_SEASON = 0.75
+
 
 def _role_trend_mult(minutes_newest_first, damp=ROLE_DAMP, min_floor=8.0):
     """
@@ -114,14 +119,18 @@ def _weighted_line(history: list[dict]) -> dict:
 
 def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1,
                     role_damp: float = ROLE_DAMP, rookies: dict | None = None,
-                    role_overrides: dict | None = None) -> tuple[dict, int]:
+                    role_overrides: dict | None = None,
+                    season_labels: list[str] | None = None,
+                    target_season: str | None = None,
+                    current_roster: dict[int, dict] | None = None) -> tuple[dict, int]:
     """
     seasons_newest_first: list of {nba_id: line}, newest season first.
     Returns ({nba_id: projected_line}, n_players_with_age) for the upcoming season.
 
-    Only players who appeared in the MOST RECENT season are projected -- otherwise
-    the union of several seasons pulls in players now out of the league, filling the
-    deep end with erratic small-sample lines. We project who's actually around.
+    Without current_roster, only players in the newest statistical season are
+    projected, preserving historical backtest behavior. With a current_roster
+    and season labels, current-roster members with recent older NBA history can
+    also be projected. The roster is an eligibility signal, not health evidence.
 
     rookies ({nba_id: projected_line}, e.g. from load_rookies()): hand-entered
     draft-class lines with no NBA history to project from. Merged in after the
@@ -138,19 +147,47 @@ def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1
     """
     if not seasons_newest_first:
         return {}, 0
+    if season_labels is not None and len(season_labels) != len(seasons_newest_first):
+        raise ValueError("season_labels must match seasons_newest_first")
     current_ids = set(seasons_newest_first[0])
+    candidate_ids = set(current_ids)
+    if current_roster is not None:
+        if season_labels is None or target_season is None:
+            raise ValueError("current_roster requires season_labels and target_season")
+        candidate_ids.intersection_update(current_roster)
+        target_start = int(target_season.split("-")[0])
+        for pid in set(current_roster) - current_ids:
+            appearances = [i for i, season in enumerate(seasons_newest_first) if pid in season]
+            if not appearances:
+                continue
+            last_idx = appearances[0]
+            last_start = int(season_labels[last_idx].split("-")[0])
+            missing = target_start - last_start - 1
+            if 0 < missing <= MAX_RETURN_MISSING_SEASONS:
+                candidate_ids.add(pid)
+
     projected: dict[int, dict] = {}
     aged = 0
 
-    for pid in current_ids:
-        history = [s[pid] for s in seasons_newest_first if pid in s][: len(RECENCY_WEIGHTS)]
+    for pid in candidate_ids:
+        history_records = [(season_labels[i] if season_labels else None, season[pid])
+                           for i, season in enumerate(seasons_newest_first) if pid in season]
+        history_records = history_records[:len(RECENCY_WEIGHTS)]
+        history = [row for _season, row in history_records]
         if not history:
             continue
         base = _weighted_line(history)
         latest = history[0]
+        last_actual_season = history_records[0][0]
+        if target_season is not None and last_actual_season is not None:
+            elapsed_seasons = max(1, int(target_season.split("-")[0]) -
+                                  int(last_actual_season.split("-")[0]))
+        else:
+            elapsed_seasons = target_age_offset
+        missing_seasons = max(0, elapsed_seasons - 1)
 
         latest_age = latest.get("age")
-        proj_age = (latest_age + target_age_offset) if latest_age is not None else None
+        proj_age = (latest_age + elapsed_seasons) if latest_age is not None else None
         if proj_age is not None:
             aged += 1
 
@@ -166,7 +203,12 @@ def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1
         # C4: a hand override, if present for this player, REPLACES the trajectory
         # multiplier (the trajectory can't see an offseason team change). The
         # trajectory value is still recorded so --explain can show both.
-        trend_mult = _role_trend_mult([h.get("min") for h in history], damp=role_damp)
+        consecutive_history = (missing_seasons == 0 and (len(history_records) < 2 or
+                               history_records[0][0] is None or history_records[1][0] is None or
+                               int(history_records[0][0].split("-")[0]) -
+                               int(history_records[1][0].split("-")[0]) == 1))
+        trend_mult = (_role_trend_mult([h.get("min") for h in history], damp=role_damp)
+                      if consecutive_history else 1.0)
         override = (role_overrides or {}).get(pid)
         role_mult = float(override) if override is not None else trend_mult
         for comp in ROLE_COMPONENTS:
@@ -183,27 +225,73 @@ def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1
         # durability aging curve and cap at a full season.
         best_recent_gp = max((h.get("gp") or 0) for h in history)
         expected_gp = 0.6 * base["gp"] + 0.4 * best_recent_gp
-        line["gp"] = min(82.0, expected_gp * age_multiplier(proj_age, "durability"))
+        return_gp_adjustment = (RETURN_GP_FACTOR_PER_MISSED_SEASON ** missing_seasons
+                                if current_roster is not None and missing_seasons else 1.0)
+        line["gp"] = min(82.0, expected_gp * age_multiplier(proj_age, "durability") *
+                         return_gp_adjustment)
 
         # Derive points and percentages from the aged components so they stay consistent.
         line["pts"] = 2 * line["fgm"] + line["fg3m"] + line["ftm"]
         line["fg_pct"] = (line["fgm"] / line["fga"]) if line["fga"] else 0.0
         line["ft_pct"] = (line["ftm"] / line["fta"]) if line["fta"] else 0.0
-        line["name"] = latest.get("name")
+        roster_player = current_roster.get(pid) if current_roster is not None else None
+        line["name"] = ((roster_player.get("name") if roster_player else None)
+                        or latest.get("name"))
         line["age"] = proj_age
-        # Position/team aren't box-score components -- they don't age or scale,
-        # just pass through from the newest season a player appears in (C1).
-        line["position"] = latest.get("position", ())
-        line["team"] = latest.get("team")
+        line["position"] = (roster_player.get("position", ()) if roster_player is not None
+                            else latest.get("position", ()))
+        line["team"] = (roster_player.get("team") if roster_player is not None
+                        else latest.get("team"))
+        line["last_actual_season"] = last_actual_season
+        line["missing_seasons"] = missing_seasons
+        line["used_returner_fallback"] = bool(current_roster is not None and pid not in current_ids)
+        line["expected_games_adjustment"] = return_gp_adjustment
+        line["roster_source"] = (f"CommonTeamRoster {target_season}"
+                                 if current_roster is not None else None)
         projected[pid] = line
 
     # C3: merge hand-entered draft-class rookies. setdefault so a real projection
     # (should an id ever collide -- synthetic negative ids make that near-impossible)
     # is never clobbered by a hand line.
     for pid, rookie_line in (rookies or {}).items():
+        if current_roster is not None and pid not in current_roster:
+            continue
         projected.setdefault(pid, rookie_line)
 
     return projected, aged
+
+
+def project_current_roster(n_seasons: int = 3) -> tuple[dict, int, str]:
+    """Build the upcoming board from cached stats and a complete target roster."""
+    from ingest.nba_boxscores import (
+        OfflineCacheMissError, get_season_boxscores, recent_completed_seasons,
+    )
+    from ingest.nba_rosters import get_season_rosters
+
+    seasons = recent_completed_seasons(n_seasons)
+    target = _next_season_label(seasons[0])
+    try:
+        current_roster, coverage = get_season_rosters(target, offline=True)
+    except OfflineCacheMissError as exc:
+        raise ValueError(f"complete {target} roster cache required for current projections; "
+                         f"a team roster response is missing: {exc}. Refresh locally with "
+                         "`python ingest/nba_rosters.py --force`.") from exc
+    if coverage["teams_total"] == 0 or coverage["teams_with_data"] != coverage["teams_total"]:
+        raise ValueError(f"complete {target} roster cache required for current projections; "
+                         f"found {coverage['teams_with_data']}/{coverage['teams_total']} team rosters. "
+                         "Refresh locally with `python ingest/nba_rosters.py --force`.")
+    if coverage.get("duplicate_ids"):
+        duplicates = ", ".join(str(row["nba_id"]) for row in coverage["duplicate_ids"])
+        raise ValueError(f"duplicate NBA IDs in the {target} roster cache: {duplicates}")
+    try:
+        lines = [get_season_boxscores(season, offline=True)[0] for season in seasons]
+    except OfflineCacheMissError as exc:
+        raise ValueError(f"cached season statistics required for current projections: {exc}") from exc
+    projected, aged = project_players(
+        lines, rookies=load_rookies(target_season=target),
+        role_overrides=load_role_overrides(target_season=target),
+        season_labels=seasons, target_season=target, current_roster=current_roster)
+    return projected, aged, target
 
 
 def _next_season_label(latest: str) -> str:
@@ -288,10 +376,8 @@ def _demo() -> None:
 
     configure_stdout_utf8()
     seasons = recent_completed_seasons(3)  # newest first
-    lines = [get_season_boxscores(s)[0] for s in seasons]
-    upcoming = _next_season_label(seasons[0])
-    projected, aged = project_players(lines, rookies=load_rookies(target_season=upcoming),
-                                     role_overrides=load_role_overrides(target_season=upcoming))
+    lines = [get_season_boxscores(s, offline=True)[0] for s in seasons]
+    projected, aged, upcoming = project_current_roster()
 
     print(f"Projecting {upcoming} from {', '.join(seasons)}")
     print(f"  {len(projected)} players projected, {aged} with age data for aging curves\n")

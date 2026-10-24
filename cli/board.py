@@ -86,17 +86,24 @@ def _load_players(args: argparse.Namespace) -> tuple[dict, str]:
     from ingest.nba_boxscores import get_season_boxscores, recent_completed_seasons
     from ingest.nba_rosters import attach_positions, load_rosters_or_warn
 
-    rosters = load_rosters_or_warn()
-
     if args.actuals:
+        rosters = load_rosters_or_warn()
         season = args.season or recent_completed_seasons(1)[0]
         players, _src = get_season_boxscores(season)
         return attach_positions(players, rosters=rosters), f"actuals: {season}"
 
     from engine.projection import (
-        _next_season_label, load_role_overrides, load_rookies, project_players,
+        _next_season_label, load_role_overrides, load_rookies, project_current_roster,
+        project_players,
     )
 
+    latest_completed = recent_completed_seasons(1)[0]
+    if args.season in (None, latest_completed):
+        projected, _aged, target = project_current_roster()
+        seasons = recent_completed_seasons(3)
+        return projected, f"projected {target} from {', '.join(seasons)}; current-roster eligible"
+
+    rosters = load_rosters_or_warn()
     seasons = _projection_window(args.season)
     lines = [get_season_boxscores(s)[0] for s in seasons]
     # project_players only reads position/team off the newest season a player
