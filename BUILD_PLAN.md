@@ -3,11 +3,10 @@
 Written 2026-08-11. Companion to `SCOPE.md` (which defines *what* v1 is).
 This file defines *what to build next and in what order*. 
 
-Updated 2026-10-23. The local checkout is `7169e8c`. The focused correctness
-cleanup below is in progress and has not been tested in this session; historical
-suite counts elsewhere in this document are not verification of this checkout.
+Updated 2026-10-23. Batch 1 was completed at commit `c95ee54`; the full suite
+passed with 192 tests.
 
-### Correctness cleanup (2026-10-23)
+### Batch 1 — correctness cleanup (complete)
 
 - `--role-audit` now reports model trend and effective override separately.
 - `Team.marginal_value(drop_id=...)` compares the original roster with the
@@ -21,20 +20,38 @@ suite counts elsewhere in this document are not verification of this checkout.
 - Draft legality always enforces total capacity. An overfull or positionally
   unassignable existing roster admits no additions until repaired; missing
   position data skips positional checks only.
-- Regression tests were added; results are pending the user's run.
+- Regression tests passed as part of the 192-test suite at `c95ee54`.
 
-Open projection coverage: `project_players()` still iterates only IDs in the
-newest input season. Returning veterans absent there (including previously
-observed Haliburton, Lillard, Kyrie Irving, and Fred VanVleet) remain excluded,
-including from historical backtests. A later change should consider current
-roster eligibility, older cached history, elapsed-age adjustment, and an
-explicit return-from-absence discount. Historical impact has not been measured.
+### Batch 2 — safe roster refresh and player coverage audit
+
+The roster CLI now preserves cached behavior by default, supports explicit
+`--force` refresh, rejects `--force --offline`, validates fetched team roster
+responses before cache replacement, and writes cache files atomically. The new
+`python -m cli.roster_audit` report is cache-only and separates upcoming
+current-roster membership, fallback membership, and their merged view. It
+reports team coverage, position gaps, latest-season stats gaps, older cached
+history, and detectable identity conflicts. Focused offline regression tests
+were added; this batch's tests are awaiting the user's run. No live request or
+projection change is part of this batch.
+
+### Upcoming projection coverage work
+
+Returning-veteran projection fallback remains upcoming. `project_players()`
+still iterates only IDs in the newest input stats season; players who missed
+that season but have older cached history are not yet projected. Use the audit
+to verify current roster identity and history first, then design an explicit
+return-from-absence fallback and measure its historical impact.
+
+The verified rookie rebuild also remains upcoming. The current
+`data/rookies_2026.json` contains synthetic negative IDs and null stat lines;
+this batch does not verify rookie identities or create stat projections.
 
 ---
 
 ## Current state
 
-Updated 2026-08-26. Suite: `pytest -q` → 165 passing, fully offline.
+Historical snapshot from 2026-08-26: `pytest -q` had 165 passing tests at that
+point. Batch 1's later 192-test result is recorded above.
 
 | Milestone | Status |
 |---|---|
@@ -59,7 +76,7 @@ Updated 2026-08-26. Suite: `pytest -q` → 165 passing, fully offline.
 | B2 the CLI | Done. `python -m cli.board`. |
 | C1 ingest positions/teams | Done (`ingest/nba_rosters.py`, `CommonTeamRoster`, per-team disk cache). |
 | C2 position-aware replacement | Done. `REPLACEMENT_MODES` = flat / hybrid / strict; **flat stays default** (see Decisions). |
-| C3 rookies | Loader/merge done; data coverage open. Current 17 entries use synthetic negative IDs and null stats, so none reach the board. Rebuild verified identities and projection baselines before filling lines. |
+| C3 rookies | Loader/merge done; verified rebuild upcoming. Current 17 entries use synthetic negative IDs and null stats, so none reach the board. |
 | C4 role overrides | Override application and explanation done; numeric decisions open. Current file has no numeric entries. `_season` scopes the file; verify each judgment and rationale against refreshed roster data before adding. |
 | C5 crosswalk override map | Done. `crosswalk/overrides.json` (ships empty) + `load_overrides()`/`resolve()`; `names.py` no longer a spike. |
 

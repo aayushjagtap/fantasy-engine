@@ -93,8 +93,16 @@ def _rows_to_roster(raw: dict, team_abbr: str) -> dict[int, dict]:
     for row in rs["rowSet"]:
         pid = row[col_index["PLAYER_ID"]]
         pos_raw = row[col_index["POSITION"]] if "POSITION" in col_index else None
-        out[pid] = {"position": normalize_position(pos_raw), "team": team_abbr}
+        name_col = "PLAYER" if "PLAYER" in col_index else "PLAYER_NAME"
+        name = row[col_index[name_col]] if name_col in col_index else None
+        out[pid] = {"name": name, "position": normalize_position(pos_raw), "team": team_abbr}
     return out
+
+
+def _fetch_validated_team_roster(team_id: int, season: str, team_abbr: str) -> dict:
+    raw = _fetch_team_roster(team_id, season)
+    _rows_to_roster(raw, team_abbr)
+    return raw
 
 
 def get_season_rosters(season: str, force: bool = False, offline: bool = False) -> tuple[dict[int, dict], dict]:
@@ -105,18 +113,30 @@ def get_season_rosters(season: str, force: bool = False, offline: bool = False) 
     is visible rather than silently thin."""
     players: dict[int, dict] = {}
     teams_with_data = 0
+    team_coverage = []
+    player_teams: dict[int, str] = {}
+    duplicate_ids = []
     team_list = _team_list()
     for i, (team_id, abbr) in enumerate(team_list):
         key = f"commonteamroster_{season}_{team_id}"
-        raw, src = _cached(key, lambda tid=team_id: _fetch_team_roster(tid, season),
+        raw, src = _cached(key, lambda tid=team_id, team=abbr: _fetch_validated_team_roster(
+                               tid, season, team),
                            force=force, offline=offline)
         roster = _rows_to_roster(raw, abbr)
         if roster:
             teams_with_data += 1
+        team_coverage.append({"team_id": team_id, "team": abbr,
+                              "has_data": bool(roster), "player_count": len(roster)})
+        for pid in roster:
+            if pid in player_teams and player_teams[pid] != abbr:
+                duplicate_ids.append({"nba_id": pid, "teams": [player_teams[pid], abbr]})
+            else:
+                player_teams[pid] = abbr
         players.update(roster)
         if src == "network" and i < len(team_list) - 1:
             time.sleep(1)  # be polite to stats.nba.com between live pulls
-    stats = {"season": season, "teams_total": len(team_list), "teams_with_data": teams_with_data}
+    stats = {"season": season, "teams_total": len(team_list), "teams_with_data": teams_with_data,
+             "team_coverage": team_coverage, "duplicate_ids": duplicate_ids}
     return players, stats
 
 
@@ -217,13 +237,13 @@ def attach_positions(players: dict[int, dict], rosters: dict[int, dict] | None =
     return out
 
 
-def _demo(offline: bool = False) -> None:
+def _demo(offline: bool = False, force: bool = False) -> None:
     from collections import Counter
 
     from util.console import configure_stdout_utf8
     configure_stdout_utf8()
 
-    rosters, stats = get_current_rosters(offline=offline)
+    rosters, stats = get_current_rosters(offline=offline, force=force)
     up, fb = stats["upcoming"], stats["fallback"]
     print(f"Upcoming season {stats['upcoming_season']}: "
           f"{up['teams_with_data']}/{up['teams_total']} teams have a roster on file")
@@ -247,8 +267,22 @@ def _selftest() -> None:
     print("selftest ok: see tests/test_nba_rosters.py")
 
 
-if __name__ == "__main__":
-    if "--selftest" in sys.argv:
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Cache and inspect NBA roster positions.")
+    parser.add_argument("--offline", action="store_true", help="use cached responses only")
+    parser.add_argument("--force", action="store_true", help="refresh cached roster responses")
+    parser.add_argument("--selftest", action="store_true", help="run offline roster tests")
+    args = parser.parse_args(argv)
+    if args.force and args.offline:
+        parser.error("--force cannot be combined with --offline")
+    if args.selftest:
         _selftest()
     else:
-        _demo(offline="--offline" in sys.argv)
+        _demo(offline=args.offline, force=args.force)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

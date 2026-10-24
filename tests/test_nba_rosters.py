@@ -9,6 +9,7 @@ from ingest.nba_rosters import (
     attach_positions,
     get_season_rosters,
     load_rosters_or_warn,
+    main,
     normalize_position,
 )
 
@@ -54,9 +55,9 @@ def test_normalize_position_missing_returns_empty():
 
 def test_rows_to_roster_keys_by_player_id_and_normalizes_position():
     roster = _rows_to_roster(FAKE_ROSTER_RESPONSE, "LAL")
-    assert roster[2544] == {"position": ("F",), "team": "LAL"}
-    assert roster[999001] == {"position": ("F", "G"), "team": "LAL"}
-    assert roster[999002] == {"position": (), "team": "LAL"}
+    assert roster[2544] == {"name": "LeBron James", "position": ("F",), "team": "LAL"}
+    assert roster[999001] == {"name": "Guard-Forward Guy", "position": ("F", "G"), "team": "LAL"}
+    assert roster[999002] == {"name": "No Position Guy", "position": (), "team": "LAL"}
 
 
 def test_rows_to_roster_finds_result_set_by_name_not_index():
@@ -85,13 +86,63 @@ def test_get_season_rosters_caches_one_file_per_team(monkeypatch, tmp_path):
     monkeypatch.setattr("ingest.nba_rosters._fetch_team_roster", fake_fetch)
     players, stats = get_season_rosters("2025-26")
     assert calls["n"] == 2
-    assert stats == {"season": "2025-26", "teams_total": 2, "teams_with_data": 2}
+    assert stats["season"] == "2025-26"
+    assert stats["teams_total"] == stats["teams_with_data"] == 2
+    assert [r["team"] for r in stats["team_coverage"]] == ["AAA", "BBB"]
     assert players[101]["team"] == "AAA"
     assert players[102]["team"] == "BBB"
 
     # Second call should be served entirely from cache -- no new fetches.
     get_season_rosters("2025-26")
     assert calls["n"] == 2
+
+
+def test_force_refresh_replaces_cached_roster(monkeypatch, tmp_path):
+    monkeypatch.setattr("ingest.nba_boxscores.CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr("ingest.nba_rosters._team_list", lambda: [(1, "AAA")])
+    calls = {"n": 0}
+
+    def fake_fetch(team_id, season):
+        calls["n"] += 1
+        return {"resultSets": [{"name": "CommonTeamRoster",
+                "headers": ["PLAYER_ID", "PLAYER", "POSITION"],
+                "rowSet": [[100 + calls["n"], "Player", "Guard"]]}]}
+
+    monkeypatch.setattr("ingest.nba_rosters._fetch_team_roster", fake_fetch)
+    first, _ = get_season_rosters("2025-26")
+    refreshed, _ = get_season_rosters("2025-26", force=True)
+    assert set(first) == {101}
+    assert set(refreshed) == {102}
+    assert calls["n"] == 2
+
+
+def test_failed_or_unusable_force_refresh_keeps_cached_roster(monkeypatch, tmp_path):
+    monkeypatch.setattr("ingest.nba_boxscores.CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr("ingest.nba_rosters._team_list", lambda: [(1, "AAA")])
+    valid = {"resultSets": [{"name": "CommonTeamRoster",
+             "headers": ["PLAYER_ID", "PLAYER", "POSITION"],
+             "rowSet": [[100, "Cached Player", "Guard"]]}]}
+    monkeypatch.setattr("ingest.nba_rosters._fetch_team_roster", lambda *_: valid)
+    get_season_rosters("2025-26")
+    monkeypatch.setattr("ingest.nba_rosters._fetch_team_roster", lambda *_: {"resultSets": []})
+    with pytest.raises(RuntimeError, match="Live pull"):
+        get_season_rosters("2025-26", force=True)
+    cached, _ = get_season_rosters("2025-26", offline=True)
+    assert set(cached) == {100}
+    def fail_fetch(*_):
+        raise ConnectionError("timed out")
+
+    monkeypatch.setattr("ingest.nba_rosters._fetch_team_roster", fail_fetch)
+    with pytest.raises(RuntimeError, match="Live pull"):
+        get_season_rosters("2025-26", force=True)
+    cached, _ = get_season_rosters("2025-26", offline=True)
+    assert set(cached) == {100}
+
+
+def test_force_and_offline_are_incompatible():
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--force", "--offline"])
+    assert exc_info.value.code == 2
 
 
 def test_get_season_rosters_offline_miss_fails_fast(monkeypatch, tmp_path):

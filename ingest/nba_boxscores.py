@@ -31,6 +31,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import tempfile
 import time
 
 CACHE_DIR = "data/cache"
@@ -126,8 +127,14 @@ def _cached(key: str, fetch_fn, force: bool = False, offline: bool = False):
     except Exception as e:
         raise RuntimeError(_network_failure_message(key, e)) from e
     os.makedirs(CACHE_DIR, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(raw, f)
+    fd, temp_path = tempfile.mkstemp(dir=CACHE_DIR, prefix=".cache-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(raw, f)
+        os.replace(temp_path, path)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
     return raw, "network"
 
 

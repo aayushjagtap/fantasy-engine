@@ -53,6 +53,35 @@ If a live pull is attempted anyway and the network call fails, the error
 message explains the datacenter-IP block and points back here rather than
 surfacing a bare timeout.
 
+### 2026-27 roster refresh and offline coverage audit
+
+Roster responses are cached per team. `ingest/nba_rosters.py` uses cached
+responses by default; `--offline` requires cache hits and never makes live
+requests. To refresh the upcoming and fallback season responses on a local
+PowerShell session, run this from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe ingest\nba_rosters.py --force
+```
+
+The refresh validates each response before replacing that team's cache file,
+and writes cache files atomically. A failed or unusable response leaves that
+team's previous cache file intact. `--force` and `--offline` cannot be used
+together.
+
+To inspect only cached roster and season-stat data, run:
+
+```powershell
+.\.venv\Scripts\python.exe -m cli.roster_audit
+```
+
+The report labels current-upcoming-roster membership separately from the
+fallback roster and their merged view. It reports cache observations, not a
+claim that every cached response reflects the live league. Review the two
+season coverage lists, duplicate/mismatch findings, current-roster players
+without latest-season stats, and the history/position sections before using
+the refreshed cache for projection or role decisions.
+
 **`--offline`**: pass `--offline` to `ingest/nba_boxscores.py` (or
 `offline=True` to `get_season_boxscores(...)`) to force cache-only lookups.
 If a requested season isn't cached, this fails immediately with a clear
