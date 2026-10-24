@@ -3,6 +3,33 @@
 Written 2026-08-11. Companion to `SCOPE.md` (which defines *what* v1 is).
 This file defines *what to build next and in what order*. 
 
+Updated 2026-10-23. The local checkout is `7169e8c`. The focused correctness
+cleanup below is in progress and has not been tested in this session; historical
+suite counts elsewhere in this document are not verification of this checkout.
+
+### Correctness cleanup (2026-10-23)
+
+- `--role-audit` now reports model trend and effective override separately.
+- `Team.marginal_value(drop_id=...)` compares the original roster with the
+  post-swap roster on one reference baseline; add-only behavior is unchanged.
+- The flat value benchmark remains intact. A separate positional comparison
+  scores VOR ordering against target-season realized value on one shared player
+  population. The old `+0.000` comparison used the unchanged `value` field, so
+  it is not evidence about positional ranking benefit. Results need to be rerun.
+- Rookie and role-override files are target-season scoped; projection entry
+  points pass the projection target season and ignore mismatched files.
+- Draft legality always enforces total capacity. An overfull or positionally
+  unassignable existing roster admits no additions until repaired; missing
+  position data skips positional checks only.
+- Regression tests were added; results are pending the user's run.
+
+Open projection coverage: `project_players()` still iterates only IDs in the
+newest input season. Returning veterans absent there (including previously
+observed Haliburton, Lillard, Kyrie Irving, and Fred VanVleet) remain excluded,
+including from historical backtests. A later change should consider current
+roster eligibility, older cached history, elapsed-age adjustment, and an
+explicit return-from-absence discount. Historical impact has not been measured.
+
 ---
 
 ## Current state
@@ -32,14 +59,14 @@ Updated 2026-08-26. Suite: `pytest -q` → 165 passing, fully offline.
 | B2 the CLI | Done. `python -m cli.board`. |
 | C1 ingest positions/teams | Done (`ingest/nba_rosters.py`, `CommonTeamRoster`, per-team disk cache). |
 | C2 position-aware replacement | Done. `REPLACEMENT_MODES` = flat / hybrid / strict; **flat stays default** (see Decisions). |
-| C3 rookies | Done. `data/rookies_2026.json`, merged flagged `is_rookie`, excluded from backtest. |
-| C4 role overrides | Done. `data/role_overrides.json`, applied after `_role_trend_mult`, shown in `--explain`. |
+| C3 rookies | Loader/merge done; data coverage open. Current 17 entries use synthetic negative IDs and null stats, so none reach the board. Rebuild verified identities and projection baselines before filling lines. |
+| C4 role overrides | Override application and explanation done; numeric decisions open. Current file has no numeric entries. `_season` scopes the file; verify each judgment and rationale against refreshed roster data before adding. |
 | C5 crosswalk override map | Done. `crosswalk/overrides.json` (ships empty) + `load_overrides()`/`resolve()`; `names.py` no longer a spike. |
 
 | Phase D item | Status |
 |---|---|
 | E1 `engine/team.py` — roster state | Done (2026-08-26). `Team` object: per-category `category_totals` (ratio cats volume-weighted), `standing` (z vs a synthetic-team baseline drawn from the draft pool, size-prorated for mid-draft use), `expected_category_wins` / `marginal_value` (the draft-assistant primitive — exact recompute, diminishing returns fall out of the win-prob sigmoid), `detect_punts` (inferred, never written back to config), `player_breakdown` (reuses `diagnose.category_contributions`). New `LeagueConfig.matchup_format` (`h2h` default / `roto`). **Revised 2026-08-26** (E2 prep — see Decision f revision): `standing()` no longer clamps `z`; proration is true first-`k`-picks; `marginal_value` delta documented as ranking-only. |
-| E2 `engine/draft.py` — draft assistant (engine half) | Done (2026-08-26). `recommend(team, players, available_ids)` ranks candidates by a blend of `marginal_value` and raw VOR: `w_mv = clamp(k / starter_slots, 0, 1)` (thin roster → trust VOR, full starters → trust marginal). `legal_additions` = full bipartite match of roster + candidate into slots (G/F/C granularity only — CommonTeamRoster has no PG/SG split; gate disables when no position data). `positional_pressure` (demand/supply per G/F/C over the remaining pool) is **reported, not applied** — `scarcity_lambda` defaults to 0.0; it, the blend curve, and the relevance window are unvalidated pending a draft sim. Output carries the full `marginal_value` dict + which inferred punts each pick respects/pushes + slot fit. VOR term uses the config-default (flat) replacement, not strict (Decision c). |
+| E2 `engine/draft.py` — draft assistant (engine half) | Done (2026-08-26). `recommend(team, players, available_ids)` ranks candidates by a blend of `marginal_value` and raw VOR: `w_mv = clamp(k / starter_slots, 0, 1)`. `legal_additions` uses full bipartite matching (G/F/C only); missing positions skip positional matching only after capacity is enforced. Invalid existing rosters admit no additions until repaired. Positional pressure is reported but not applied; settings remain unvalidated pending a draft sim. VOR uses flat replacement. |
 
 Still deferred: **`cli/draft.py`** (the front door for E2 — next session), the
 trade analyzer (also consumes `engine/team.py`), the rest of M5 (game-log
@@ -354,9 +381,11 @@ uncapped his FT% drag outweighs his FG% credit. Everyone else is stable. No
 reason to move off 3.0.
 
 ### c. Flat replacement stays the default
-`replacement_mode=hybrid` moved Spearman **+0.000** on all three predictors
-(naive / role-trend OFF / ON) in the A4 backtest with real position data on hand
-(n = 358). It also *mildly penalizes centers*: the current pool has ~113
+The previously reported `+0.000` comparison evaluated the unchanged `value`
+field, while positional replacement changes VOR and rank. It therefore says
+nothing about positional ranking benefit. Flat remains the default pending the
+new VOR-order comparison. The old cache-based center/guard counts below are
+historical diagnostics only. The prior snapshot had ~113
 C-eligible vs ~301 G-eligible players (verified against the roster cache:
 C = 113, G = 301) competing for ~12 C vs ~36 G starter slots in a 12-team
 league, so the replacement *percentile* lands at a comparable depth for both —

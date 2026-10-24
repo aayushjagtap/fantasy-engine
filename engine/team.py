@@ -491,9 +491,12 @@ class Team:
         units = self._resolve_units(units)
         ignore = set(ignore_categories)
         drop = () if drop_id is None else (drop_id,)
-        n_ref = max(1, len(self._roster_ids_with((candidate_id,), drop)))
-        before = self.standing(drop_ids=drop, prorate_to=n_ref)
-        after = self.standing(extra_ids=(candidate_id,), drop_ids=drop, prorate_to=n_ref)
+        no_op = drop_id == candidate_id and candidate_id in self.roster_ids
+        n_ref = max(1, len(self.roster_ids) if no_op else
+                    len(self._roster_ids_with((candidate_id,), drop)))
+        before = self.standing(prorate_to=n_ref)
+        after = (before if no_op else self.standing(
+            extra_ids=(candidate_id,), drop_ids=drop, prorate_to=n_ref))
 
         per_cat, tot_before, tot_after = {}, 0.0, 0.0
         for cat in self.config.active_categories:
@@ -576,8 +579,11 @@ def _demo() -> None:
     rosters = load_rosters_or_warn()
     lines = [get_season_boxscores(s)[0] for s in seasons]
     lines[0] = attach_positions(lines[0], rosters=rosters)
-    projected, _ = project_players(lines, rookies=load_rookies(),
-                                   role_overrides=load_role_overrides())
+    from engine.projection import _next_season_label
+    target = _next_season_label(seasons[0])
+    projected, _ = project_players(
+        lines, rookies=load_rookies(target_season=target),
+        role_overrides=load_role_overrides(target_season=target))
 
     cfg = standard_9cat()
     board = compute_values(projected, cfg)

@@ -25,8 +25,9 @@ THREE THINGS THE RAW marginal_value RANKING DOES NOT HANDLE, added here:
    label would imply precision the data does not have. A player with no position
    on file (retired / overseas / unsigned) is treated as UTIL/BENCH-only, not as
    a wildcard -- a recommendation you cannot legally make is a bug. If NO player
-   in the roster or candidate list has a position, the gate switches off entirely
-   (same degradation as engine/value.py's positional replacement).
+   in the roster or candidate list has a position, matching is skipped only
+   after total roster capacity is checked. A roster that cannot fit its slots
+   admits no additions until it is repaired.
 
 2. EARLY-DRAFT BLENDING.  At pick 1 the roster carries almost no signal:
    marginal_value's "before" standing is a near-empty prior, every category near a
@@ -50,9 +51,8 @@ THREE THINGS THE RAW marginal_value RANKING DOES NOT HANDLE, added here:
 
    The VOR term uses the CONFIG-DEFAULT replacement (flat), computed over the
    REMAINING pool. Positional (strict/hybrid) replacement was rejected empirically
-   for this project (BUILD_PLAN.md Decision c: hybrid +0.000 Spearman, strict
-   penalizes centers via the eligible-pool asymmetry); putting it here would
-   relitigate that and double-count scarcity against term 3.
+   for this project while its backtest is being corrected (BUILD_PLAN.md
+   Decision c); putting it here would also double-count scarcity against term 3.
 
 3. POSITIONAL SCARCITY over the REMAINING pool.  positional_pressure() reports
    demand / supply per G/F/C: demand is the league-wide count of dedicated slots
@@ -191,10 +191,9 @@ def legal_additions(team, players: dict, candidate_ids) -> set:
     eligibility; UTIL/BENCH admit anyone). Candidates already on the roster, or
     absent from `players`, are never legal.
 
-    If no player anywhere (roster or candidates) has a position on file, the
-    gate cannot say anything useful and every candidate is returned as legal --
-    matching engine/value.py's fall back to the flat pool when position data is
-    missing.
+    Missing positions disable positional matching only when the roster can fit
+    by capacity. An invalid existing roster yields no legal additions until it
+    is repaired; silently accepting every candidate would hide that violation.
     """
     roster = [pid for pid in team.roster_ids if pid in players]
     cands = [c for c in dict.fromkeys(candidate_ids)
@@ -203,6 +202,8 @@ def legal_additions(team, players: dict, candidate_ids) -> set:
         return set()
 
     slot_positions = _slot_positions(team.config)
+    if len(team.roster_ids) >= len(slot_positions):
+        return set()
     groups_of = {pid: player_groups(players, pid) for pid in roster + cands}
 
     if not any(groups_of[pid] for pid in roster + cands):
@@ -213,9 +214,8 @@ def legal_additions(team, players: dict, candidate_ids) -> set:
     slot_of: list = [None] * len(slot_positions)
     for pid in roster:
         if not _augment(pid, groups_of, slot_positions, set(), slot_of):
-            # The roster itself does not fit the slot template (over-full, or a
-            # config mismatch). Nothing sensible to gate on -> everyone legal.
-            return set(cands)
+            # An invalid existing roster cannot safely accept another player.
+            return set()
 
     legal = set()
     for c in cands:
@@ -393,8 +393,11 @@ def _demo() -> None:
     rosters = load_rosters_or_warn()
     lines = [get_season_boxscores(s)[0] for s in seasons]
     lines[0] = attach_positions(lines[0], rosters=rosters)
-    projected, _ = project_players(lines, rookies=load_rookies(),
-                                   role_overrides=load_role_overrides())
+    from engine.projection import _next_season_label
+    target = _next_season_label(seasons[0])
+    projected, _ = project_players(
+        lines, rookies=load_rookies(target_season=target),
+        role_overrides=load_role_overrides(target_season=target))
 
     cfg = standard_9cat()
     board = compute_values(projected, cfg)

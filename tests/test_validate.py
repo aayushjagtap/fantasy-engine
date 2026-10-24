@@ -3,7 +3,9 @@ plus a new offline regression test for the common-population bug (A4).
 """
 from __future__ import annotations
 
-from backtest.validate import _rankdata, _score_predictors, prior_seasons, spearman
+import pytest
+
+from backtest.validate import _rankdata, _score_predictors, _score_ranking, prior_seasons, spearman
 
 
 def test_spearman_perfect_and_inverse():
@@ -57,3 +59,13 @@ def test_score_predictors_empty_intersection():
     base_c, off_c, on_c, n = _score_predictors(actual, baseline, ours_off, ours_on)
     assert n == 0
     assert (base_c, off_c, on_c) == (0.0, 0.0, 0.0)
+
+
+def test_positional_ranking_comparison_uses_vor_against_realized_value():
+    actual = {1: 4.0, 2: 3.0, 3: 2.0, 4: 1.0}
+    flat = [{"nba_id": i, "vor": v} for i, v in enumerate((4, 3, 2, 1), 1)]
+    hybrid = [{"nba_id": i, "vor": v} for i, v in enumerate((3, 4, 1, 2), 1)]
+    scores, n = _score_ranking(actual, [flat, hybrid])
+    assert n == 4
+    assert scores[0] == pytest.approx(1.0)
+    assert scores[1] < scores[0]

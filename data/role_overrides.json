@@ -1,4 +1,5 @@
 {
+  "_season": "2026-27",
   "_comment": [
     "C4 -- hand-edited role multipliers, keyed by nba_id. engine.projection._role_trend_mult reads a player's minutes trajectory and CANNOT know a player changed teams; after an active offseason it projects a fading role for players who just landed a bigger one (and vice versa).",
     "APPLIED in project_players() AFTER _role_trend_mult and REPLACING it -- the value here becomes the effective role_mult that scales the projected volume line. The model's own minutes-trajectory result is still computed and recorded as role_trend_mult, and both are shown by `cli/board.py --explain` so an override is never silent.",

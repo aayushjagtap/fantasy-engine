@@ -71,6 +71,12 @@ def test_load_rookies_missing_file_returns_empty(tmp_path):
     assert load_rookies(str(tmp_path / "nope.json")) == {}
 
 
+def test_load_rookies_only_applies_to_matching_target_season(tmp_path):
+    path = _write_file(tmp_path, [_full_entry()])
+    assert load_rookies(path, verbose=False, target_season="2025-26") == {}
+    assert set(load_rookies(path, verbose=False, target_season="2026-27")) == {-2026001}
+
+
 # --- project_players merge ---
 
 def test_project_players_merges_rookies_without_touching_returners():

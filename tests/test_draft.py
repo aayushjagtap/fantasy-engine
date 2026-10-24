@@ -126,6 +126,25 @@ def test_missing_position_data_disables_the_gate():
     assert legal == {G3, C1, F1}                        # nothing to gate on -> all legal
 
 
+def test_missing_position_data_still_enforces_total_capacity():
+    blind_pool = {i: {**p, "position": ()} for i, p in POOL.items()}
+    cfg = _cfg([("PG", 1), ("SG", 1)])
+    team = Team(cfg, blind_pool, [G1, G2], min_gp=1)
+    assert legal_additions(team, blind_pool, [G3]) == set()
+
+
+def test_overfull_roster_has_no_legal_additions():
+    cfg = _cfg([("PG", 1), ("C", 1)])
+    team = _team(cfg, [G1, C1, F1])
+    assert legal_additions(team, POOL, [G2]) == set()
+
+
+def test_positionally_invalid_roster_has_no_legal_additions():
+    cfg = _cfg([("PG", 1), ("C", 1), ("SF", 1)])
+    team = _team(cfg, [G1, G2])
+    assert legal_additions(team, POOL, [C1]) == set()
+
+
 def test_slot_fit_reports_group_level_labels():
     cfg = _cfg([("PG", 1), ("SG", 1), ("SF", 1), ("PF", 1), ("C", 1), ("UTIL", 1), ("BENCH", 1)])
     team = _team(cfg, [])

@@ -284,6 +284,24 @@ def test_marginal_value_sums_and_matches_objective():
             mv["delta_expected_wins"], abs=1e-9)
 
 
+def test_replacement_marginal_value_compares_original_roster_to_true_swap():
+    downgrade = _team([STAR_A, WALL_A, GUARD_A]).marginal_value(MID_D, drop_id=STAR_A)
+    upgrade_team = _team([MID_D, WALL_A, GUARD_A])
+    upgrade = upgrade_team.marginal_value(STAR_A, drop_id=MID_D)
+    noop_team = _team([STAR_A, WALL_A, GUARD_A])
+    noop = noop_team.marginal_value(STAR_A, drop_id=STAR_A)
+
+    assert downgrade["delta_expected_wins"] < 0
+    assert upgrade["delta_expected_wins"] > 0
+    assert noop["delta_expected_wins"] == pytest.approx(0.0, abs=1e-12)
+    for team, mv in ((_team([STAR_A, WALL_A, GUARD_A]), downgrade),
+                     (upgrade_team, upgrade), (noop_team, noop)):
+        assert sum(mv["per_category"].values()) == pytest.approx(
+            mv["delta_expected_wins"], abs=1e-9)
+        assert mv["before"] == pytest.approx(
+            team.expected_category_wins(prorate_to=len(team.roster_ids)), abs=1e-9)
+
+
 def test_add_remove_mutate_roster_without_touching_baseline():
     t = _team([STAR_A])
     base_before = dict(t.league_baseline())

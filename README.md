@@ -151,19 +151,22 @@ gitignored -- these two are explicitly un-ignored, like `data/cache/`), both
 are optional (a missing file changes nothing), and both are surfaced in the
 board so they're never silent.
 
-- **`data/rookies_2026.json`** -- the incoming draft class. `project_players`
-  only projects players who appeared in the most recent season, so without
-  this the entire rookie class is absent from a 2026-27 board. Entries carry
-  a per-game line and merge in flagged `is_rookie` (marked `(R)` on the
+- **`data/rookies_2026.json`** -- season-scoped incoming draft class.
+  `project_players` only projects players who appeared in the most recent
+  season, so rookies need this separate source. The top-level `season` must
+  match the projection target. Entries with complete per-game lines merge in
+  flagged `is_rookie` (marked `(R)` on the
   board, an `is_rookie` column in the CSV, excluded from the backtest).
-  **Stat keys ship as `null` on purpose**: `load_rookies()` skips any entry
+  The current entries have stat keys `null`: `load_rookies()` skips any entry
   whose line isn't filled in and logs how many it skipped, so an unfilled
   rookie stays off the board rather than showing up as a fabricated
   projection. `nba_id`s are synthetic negatives until the real ones exist --
   see the file's `_comment` for the lifecycle (purge it once 2026-27 actuals
   are ingested, or players double-count).
 
-- **`data/role_overrides.json`** -- `{nba_id: multiplier}`. The role-trend
+- **`data/role_overrides.json`** -- season-scoped `{nba_id: multiplier}`. Its
+  `_season` metadata must match the projection target season; mismatched files
+  are ignored. The role-trend
   signal reads a minutes trajectory and can't see an offseason team change,
   so it fades players who just landed bigger roles (and vice versa). An
   override *replaces* the computed trend multiplier for that player; the
@@ -264,8 +267,9 @@ for r in recommend(team, projected_players, still_available, n=10):
   player can be assigned to distinct slots (`legal_additions` -- a real bipartite
   match, not "is any slot free"). Positions are G/F/C only (CommonTeamRoster has
   no PG/SG split), so the gate really constrains across the G/F/C boundary and a
-  full bench; a player with no position on file is UTIL/BENCH-only. If no
-  position data is loaded at all, the gate switches off.
+  full bench; a player with no position on file is UTIL/BENCH-only. If position
+  data is missing, positional matching is skipped after enforcing total roster
+  capacity. An invalid existing roster admits no additions until repaired.
 - **Positional scarcity** (`positional_pressure`: demand/supply per G/F/C over
   the *remaining* pool) is **reported, not applied** -- `scarcity_lambda`
   defaults to `0.0`. That constant, the blend curve, and the relevance window

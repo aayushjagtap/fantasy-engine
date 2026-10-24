@@ -76,6 +76,18 @@ def _values_by_id(board: list[dict]) -> dict:
     return {r["nba_id"]: r["value"] for r in board}
 
 
+def _vor_by_id(board: list[dict]) -> dict:
+    return {r["nba_id"]: r["vor"] for r in board}
+
+
+def _score_ranking(actual_values: dict, prediction_boards: list[list[dict]]) -> tuple[list[float], int]:
+    """Compare ranking orderings against realized target-season value on one pool."""
+    predictions = [_vor_by_id(board) for board in prediction_boards]
+    common = sorted(set(actual_values).intersection(*(set(p) for p in predictions)))
+    actual = [actual_values[i] for i in common]
+    return [spearman([p[i] for i in common], actual) for p in predictions], len(common)
+
+
 def _score_predictors(actual: dict, baseline: dict, ours_off: dict, ours_on: dict):
     """Score three predictors against `actual` on ONE common population.
 
@@ -154,18 +166,22 @@ def run_backtest(target_season: str | None = None, min_gp: int = 20, replacement
     print(f"  -> role-trend adds:  {on_c - off_c:+.3f}   |   vs baseline:  {on_c - base_c:+.3f}")
     print(f"  Top-30 hit rate: {hits}/30 of our projected top 30 finished top 30\n")
 
-    # C2: report whether positional replacement moves these numbers at all,
-    # without disturbing the primary (flat, reproduces-the-recorded-baseline)
-    # numbers printed above. Only fires on a plain flat run with position data
-    # on hand, so `python backtest/validate.py` shows the before/after in one go.
+    # Keep the flat value benchmark intact; this separate comparison evaluates
+    # the rank order produced by each replacement mode.
     if replacement_mode == "flat" and have_positions:
         h_actual, h_on, h_off, h_baseline = _boards("hybrid")
-        h_base_c, h_off_c, h_on_c, h_n = _score_predictors(
-            _values_by_id(h_actual), _values_by_id(h_baseline), _values_by_id(h_off), _values_by_id(h_on))
-        print(f"Same comparison under replacement_mode=hybrid (n={h_n}):")
-        print(f"  naive baseline:         {h_base_c:.3f}  ({h_base_c - base_c:+.3f} vs flat)")
-        print(f"  ours, role-trend OFF:   {h_off_c:.3f}  ({h_off_c - off_c:+.3f} vs flat)")
-        print(f"  ours, role-trend ON:    {h_on_c:.3f}  ({h_on_c - on_c:+.3f} vs flat)\n")
+        # Keep the established flat value benchmark above. Separately evaluate
+        # each mode's actual VOR ordering against the same realized target value.
+        # Use one player population across both modes and all three predictors.
+        flat_by_name = [baseline_board, proj_off, proj_on]
+        hybrid_by_name = [h_baseline, h_off, h_on]
+        scores, rank_n = _score_ranking(
+            actual, flat_by_name + hybrid_by_name)
+        flat_scores, hybrid_scores = scores[:3], scores[3:]
+        print(f"Positional VOR ranking vs target-season realized value (common n={rank_n}):")
+        print(f"  naive baseline:         flat {flat_scores[0]:.3f} | hybrid {hybrid_scores[0]:.3f}")
+        print(f"  ours, role-trend OFF:   flat {flat_scores[1]:.3f} | hybrid {hybrid_scores[1]:.3f}")
+        print(f"  ours, role-trend ON:    flat {flat_scores[2]:.3f} | hybrid {hybrid_scores[2]:.3f}\n")
     elif replacement_mode == "flat":
         print("(No cached position data -- run `python ingest/nba_rosters.py` locally, "
               "then rerun this to also compare replacement_mode=hybrid here.)\n")

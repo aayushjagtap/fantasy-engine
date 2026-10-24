@@ -23,8 +23,16 @@ def _rising_minutes_history():
 
 def test_load_role_overrides_parses_and_ignores_underscore_keys(tmp_path):
     p = tmp_path / "ro.json"
-    p.write_text(json.dumps({"_comment": "x", "_notes": {"1": "y"}, "2544": 1.1, "203507": 0.9}))
-    assert load_role_overrides(str(p)) == {2544: 1.1, 203507: 0.9}
+    p.write_text(json.dumps({"_season": "2026-27", "_comment": "x", "_notes": {"1": "y"},
+                             "2544": 1.1, "203507": 0.9}))
+    assert load_role_overrides(str(p), target_season="2026-27") == {2544: 1.1, 203507: 0.9}
+
+
+def test_role_override_data_is_limited_to_its_target_season(tmp_path):
+    p = tmp_path / "ro.json"
+    p.write_text(json.dumps({"_season": "2026-27", "_notes": {}, "7": 0.80}))
+    assert load_role_overrides(str(p), target_season="2025-26") == {}
+    assert load_role_overrides(str(p), target_season="2026-27") == {7: 0.80}
 
 
 def test_load_role_overrides_missing_file_returns_empty(tmp_path):

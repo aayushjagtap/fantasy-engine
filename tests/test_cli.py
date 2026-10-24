@@ -210,6 +210,41 @@ def test_role_audit_lists_a_team_changer_on_the_board(monkeypatch, capsys):
     assert "DAL -> LAL" in out
 
 
+def test_role_audit_distinguishes_model_and_effective_override(monkeypatch, capsys):
+    players = dict(SIX_PLAYER_FIXTURE)
+    players[3] = dict(players[3], role_trend_mult=1.10, role_mult=0.80, role_override=0.80)
+    monkeypatch.setattr("cli.board._load_players", lambda args: (players, "test"))
+    monkeypatch.setattr("ingest.nba_rosters.team_changes", lambda offline=True: {3: ("DAL", "LAL")})
+    monkeypatch.setattr("engine.projection.load_role_overrides", lambda target_season=None: {3: 0.80})
+    rc = main(["--role-audit", "--league", "leagues/standard_9cat.json"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "1.100" in out and "0.800" in out
+    assert "model" in out and "effective" in out
+
+
+def test_historical_projection_board_excludes_current_rookies_and_overrides(monkeypatch):
+    from types import SimpleNamespace
+    from cli.board import _load_players
+
+    seasons = {name: dict(SIX_PLAYER_FIXTURE) for name in
+               ("2024-25", "2023-24", "2022-23")}
+    monkeypatch.setattr("ingest.nba_boxscores.get_season_boxscores",
+                        lambda season: (seasons[season], "test"))
+    monkeypatch.setattr("ingest.nba_rosters.load_rosters_or_warn", lambda: {})
+    monkeypatch.setattr("ingest.nba_rosters.attach_positions", lambda players, rosters: players)
+    monkeypatch.setattr("engine.projection.load_rookies",
+                        lambda target_season=None: {-2026001: {"is_rookie": True}}
+                        if target_season == "2026-27" else {})
+    monkeypatch.setattr("engine.projection.load_role_overrides",
+                        lambda target_season=None: {3: 0.80}
+                        if target_season == "2026-27" else {})
+    players, description = _load_players(SimpleNamespace(actuals=False, season="2024-25"))
+    assert "projected 2025-26" in description
+    assert -2026001 not in players
+    assert not players[3].get("role_override")
+
+
 def test_role_audit_mutually_exclusive_with_explain(monkeypatch, capsys):
     monkeypatch.setattr("cli.board._load_players", lambda args: (SIX_PLAYER_FIXTURE, "test"))
     rc = main(["--role-audit", "--explain", "allround", "--league", "leagues/standard_9cat.json"])

@@ -233,8 +233,12 @@ def _rookie_line(entry: dict) -> dict:
     return line
 
 
-def load_rookies(path: str = ROOKIES_PATH, verbose: bool = True) -> dict[int, dict]:
+def load_rookies(path: str = ROOKIES_PATH, verbose: bool = True,
+                 target_season: str | None = None) -> dict[int, dict]:
     """{nba_id: projected_line} for hand-entered draft-class rookies.
+
+    When target_season is supplied, the file's top-level season must match;
+    this keeps current hand data out of historical projections.
 
     An entry whose stat line is incomplete (any of _ROOKIE_REQUIRED_STATS null
     or missing) is SKIPPED -- the shipped file has null stat lines by design, so
@@ -246,6 +250,8 @@ def load_rookies(path: str = ROOKIES_PATH, verbose: bool = True) -> dict[int, di
         return {}
     with open(path, "r", encoding="utf-8") as f:
         doc = json.load(f)
+    if target_season is not None and doc.get("season") != target_season:
+        return {}
     out: dict[int, dict] = {}
     skipped = 0
     for entry in doc.get("rookies", []):
@@ -260,13 +266,17 @@ def load_rookies(path: str = ROOKIES_PATH, verbose: bool = True) -> dict[int, di
     return out
 
 
-def load_role_overrides(path: str = ROLE_OVERRIDES_PATH) -> dict[int, float]:
+def load_role_overrides(path: str = ROLE_OVERRIDES_PATH,
+                        target_season: str | None = None) -> dict[int, float]:
     """{nba_id: multiplier} hand-edited role overrides. Keys starting with '_'
-    (comment / notes blocks) are ignored. A missing file returns {}."""
+    (comment / notes blocks) are ignored. When target_season is supplied, the
+    file's top-level _season must match. A missing file returns {}."""
     if not os.path.exists(path):
         return {}
     with open(path, "r", encoding="utf-8") as f:
         doc = json.load(f)
+    if target_season is not None and doc.get("_season") != target_season:
+        return {}
     return {int(k): float(v) for k, v in doc.items() if not str(k).startswith("_")}
 
 
@@ -279,9 +289,9 @@ def _demo() -> None:
     configure_stdout_utf8()
     seasons = recent_completed_seasons(3)  # newest first
     lines = [get_season_boxscores(s)[0] for s in seasons]
-    projected, aged = project_players(lines, rookies=load_rookies(),
-                                     role_overrides=load_role_overrides())
     upcoming = _next_season_label(seasons[0])
+    projected, aged = project_players(lines, rookies=load_rookies(target_season=upcoming),
+                                     role_overrides=load_role_overrides(target_season=upcoming))
 
     print(f"Projecting {upcoming} from {', '.join(seasons)}")
     print(f"  {len(projected)} players projected, {aged} with age data for aging curves\n")

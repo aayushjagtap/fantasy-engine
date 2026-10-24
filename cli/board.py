@@ -109,9 +109,10 @@ def _load_players(args: argparse.Namespace) -> tuple[dict, str]:
     # C4: hand role overrides replace the minutes-trajectory multiplier for
     # players whose offseason team change the trajectory can't see. --explain
     # surfaces any that applied.
-    projected, _aged = project_players(
-        lines, rookies=load_rookies(), role_overrides=load_role_overrides())
     upcoming = _next_season_label(seasons[0])
+    projected, _aged = project_players(
+        lines, rookies=load_rookies(target_season=upcoming),
+        role_overrides=load_role_overrides(target_season=upcoming))
     return projected, f"projected {upcoming} from {', '.join(seasons)}"
 
 
@@ -222,12 +223,14 @@ def cmd_role_audit(args: argparse.Namespace, players: dict) -> int:
     """C4 diagnostic: who changed teams for the upcoming season, ranked by
     projected value -- the shortlist for a hand-written role override. Reports
     only; it never writes data/role_overrides.json."""
-    from engine.projection import load_role_overrides
+    from engine.projection import _next_season_label, load_role_overrides
+    from ingest.nba_boxscores import recent_completed_seasons
     from ingest.nba_rosters import team_changes
 
     cfg = LeagueConfig.load(args.league) if args.league else standard_9cat()
     changes = team_changes(offline=True)
-    overrides = load_role_overrides()
+    source_season = args.season or recent_completed_seasons(1)[0]
+    overrides = load_role_overrides(target_season=_next_season_label(source_season))
     board = compute_values(players, cfg, basis=args.basis, replacement_mode=args.replacement)
     by_id = {r["nba_id"]: r for r in board}
 
@@ -236,18 +239,23 @@ def cmd_role_audit(args: argparse.Namespace, players: dict) -> int:
         r = by_id.get(pid)
         if not r:  # changed teams but not in the projected/eligible board (hurt, retired, <min GP)
             continue
-        role_mult = (players.get(pid) or {}).get("role_mult")
-        rows.append((r["value"], r["rank"], r["name"], role_mult, old, new, pid in overrides))
+        player = players.get(pid) or {}
+        model_mult = player.get("role_trend_mult", player.get("role_mult"))
+        effective_mult = player.get("role_mult")
+        rows.append((r["value"], r["rank"], r["name"], model_mult, effective_mult,
+                     old, new, pid in overrides))
     rows.sort(key=lambda t: t[0], reverse=True)
 
     print(f"\n{cfg.name}: players who changed teams for the upcoming season, ranked by projected value")
-    print(f"basis={args.basis}  |  role_mult = model's minutes-trajectory multiplier (pre-override)  |  "
-          f"* = already in data/role_overrides.json")
-    print(f"{'#':>4} {'player':<26} {'value':>8} {'role_mult':>10}  {'move':<12} ovr")
-    print("-" * 74)
-    for value, rank, name, role_mult, old, new, has_ovr in rows:
-        rm = f"{role_mult:.3f}" if role_mult is not None else "  -  "
-        print(f"{rank:>4} {(name or '?'):<26} {value:>8} {rm:>10}  {old + ' -> ' + new:<12} {'*' if has_ovr else ''}")
+    print(f"basis={args.basis}  |  model = minutes-trajectory multiplier; effective = after override  |  "
+          f"* = override present")
+    print(f"{'#':>4} {'player':<26} {'value':>8} {'model':>8} {'effective':>10}  {'move':<12} ovr")
+    print("-" * 86)
+    for value, rank, name, model_mult, effective_mult, old, new, has_ovr in rows:
+        mm = f"{model_mult:.3f}" if model_mult is not None else "-"
+        em = f"{effective_mult:.3f}" if effective_mult is not None else "-"
+        print(f"{rank:>4} {(name or '?'):<26} {value:>8} {mm:>8} {em:>10}  "
+              f"{old + ' -> ' + new:<12} {'*' if has_ovr else ''}")
     if not rows:
         print("  (no team-changers intersect the projected board)")
     else:

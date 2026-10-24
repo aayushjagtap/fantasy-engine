@@ -190,13 +190,15 @@ if __name__ == "__main__":
     else:
         # demo path uses the real ingest/projection when run in the repo
         from ingest.nba_boxscores import get_season_boxscores, recent_completed_seasons
-        from engine.projection import load_role_overrides, load_rookies, project_players
+        from engine.projection import _next_season_label, load_role_overrides, load_rookies, project_players
         from engine.league_config import standard_9cat
         from util.console import configure_stdout_utf8
         configure_stdout_utf8()
         name = " ".join(a for a in sys.argv[1:] if not a.startswith("-")).strip() or "Jamal Murray"
         seasons = recent_completed_seasons(3)
         lines = [get_season_boxscores(s)[0] for s in seasons]
-        projected, _ = project_players(lines, rookies=load_rookies(),
-                                      role_overrides=load_role_overrides())
+        target = _next_season_label(seasons[0])
+        projected, _ = project_players(
+            lines, rookies=load_rookies(target_season=target),
+            role_overrides=load_role_overrides(target_season=target))
         explain(projected, standard_9cat(), name)
