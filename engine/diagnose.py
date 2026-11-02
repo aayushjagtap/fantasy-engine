@@ -122,7 +122,9 @@ def explain(players, config, target_name, min_gp=20, pool_size=None, basis="avai
     position = "/".join(p.get("position") or ()) or "?"
     print(f"\n{p.get('name')}  (proj age {p.get('age')}, {round(p.get('gp') or 0)} GP, pos {position})"
           f"  ->  rank #{rank}  (replacement_mode={replacement_mode})")
-    if p.get("role_mult") is not None:
+    generated_rookie = (p.get("is_rookie") and
+                        p.get("projection_source") == "historical_young_player_baseline")
+    if p.get("role_mult") is not None and not generated_rookie:
         eff = p["role_mult"]
         trend = "expanding role" if eff > 1 else "shrinking role" if eff < 1 else "flat role"
         if p.get("role_override") is not None:
@@ -133,7 +135,15 @@ def explain(players, config, target_name, min_gp=20, pool_size=None, basis="avai
         else:
             print(f"  role trend multiplier: {eff:.3f}  ({trend}, from minutes trajectory)")
     if p.get("is_rookie"):
-        print("  rookie: 2026 draft class -- hand-entered line from data/rookies_2026.json, not a model projection")
+        if p.get("projection_source") == "historical_young_player_baseline":
+            print(f"  rookie baseline estimate: historical {p.get('comparator_position')} comparators, "
+                  f"n={p.get('comparator_sample_size')}; {p.get('comparator_criteria')}")
+            print(f"  draft pick: {p.get('draft_pick')}; manual opportunity multiplier: "
+                  f"{p.get('manual_opportunity_multiplier') if p.get('manual_opportunity_multiplier') is not None else 1.0:.2f} "
+                  "(per-game opportunity components only; not a minutes forecast)")
+            print("  modeled estimate from historical statistics; not actual NBA results or a validated player forecast")
+        else:
+            print("  rookie: 2026 draft class -- manual line from data/rookies_2026.json")
     if p.get("used_returner_fallback"):
         print(f"  historical fallback: last actual season {p.get('last_actual_season')}; "
               f"{p.get('missing_seasons')} missing season(s); expected-games adjustment "

@@ -45,6 +45,25 @@ def test_explain_shows_returner_fallback_and_availability_metadata(capsys):
     assert "does not confirm health" in output
 
 
+def test_explain_shows_rookie_baseline_provenance(capsys):
+    players = {pid: dict(player) for pid, player in SIX_PLAYER_FIXTURE.items()}
+    player = next(p for p in players.values() if p["name"] == "allround")
+    player.update(is_rookie=True, projection_source="historical_young_player_baseline",
+                  comparator_position="G", comparator_sample_size=38,
+                  comparator_criteria="age <= 20; GP >= 40", draft_pick=2,
+                  manual_opportunity_multiplier=1.3)
+    explain(players, standard_9cat(), "allround", min_gp=1, pool_size=6)
+    output = capsys.readouterr().out
+    assert "rookie baseline estimate" in output
+    assert "n=38" in output
+    assert "draft pick: 2" in output
+    assert "1.30" in output
+    assert "not actual NBA results" in output
+    assert "minutes trajectory" not in output
+    assert "role trend multiplier" not in output
+    assert "expanding role" not in output
+
+
 # --- B2: accent-insensitive lookup (normalize_name three-tier match) ---
 
 @pytest.mark.parametrize("query", ["Luka Dončić", "Luka Doncic", "luka doncic", "LUKA DONCIC"])

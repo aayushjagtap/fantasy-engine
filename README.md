@@ -1,5 +1,9 @@
 # Fantasy Basketball Value Engine
 
+Batch 3 completed at commit `1d0e415` with 205 tests passing. The historical
+backtest remains unchanged at 358 players and Spearman 0.689 with role trends
+enabled.
+
 A league-adaptive fantasy basketball valuation engine. Ingest NBA box-score
 data, compute category or points value from a `LeagueConfig` object (9-cat,
 points, punt builds -- swap the config and the whole ranked board re-sorts),
@@ -180,17 +184,38 @@ gitignored -- these two are explicitly un-ignored, like `data/cache/`), both
 are optional (a missing file changes nothing), and both are surfaced in the
 board so they're never silent.
 
-- **`data/rookies_2026.json`** -- season-scoped incoming draft class.
-  Players without NBA statistical history need this separate source. The top-level `season` must
-  match the projection target. Entries with complete per-game lines merge in
-  flagged `is_rookie` (marked `(R)` on the
-  board, an `is_rookie` column in the CSV, excluded from the backtest).
-  The current entries have stat keys `null`: `load_rookies()` skips any entry
-  whose line isn't filled in and logs how many it skipped, so an unfilled
-  rookie stays off the board rather than showing up as a fabricated
-  projection. `nba_id`s are synthetic negatives until the real ones exist --
-  see the file's `_comment` for the lifecycle (purge it once 2026-27 actuals
-  are ingested, or players double-count).
+- **`data/rookies_2026.json`** -- season-scoped, verified first-round identities
+  with real NBA IDs. Pick order is sourced to [NBA.com](https://www.nba.com/news/2026-nba-draft-order); current teams and coarse
+  positions are matched by ID from the committed 2026-27 `CommonTeamRoster`
+  cache. One cache name (Karim López) contains a malformed replacement
+  character in place of its accented letter; identity matching accounts for that known issue and
+  the official spelling is used. Unknown ages remain null.
+  Rookie stats are generated offline by `engine/rookie_baseline.py` from
+  committed historical NBA caches and carry provenance into `--explain`.
+  These are provisional young-player statistical baselines, not actual results
+  or validated player forecasts. Supported lines are marked `(R)` on the board
+  and in CSV; genuine historical-stat projections win ID collisions. Rookie
+  baselines apply only to 2026-27 and current roster membership remains
+  required.
+
+Historical comparators come from regular-season PerGame caches from 2020-21
+through 2025-26: age <= 20, at least 40 GP, complete observed components, and
+a position from the later 2026-27 roster snapshot. Each player-season counts
+once. Multi-position groups use fixed C > F > G precedence. Since positions
+may have changed between snapshots, this is a disclosed proxy. Median observed
+components are used; points and shooting percentages are derived from makes
+and attempts. Minimum group size is 20: G has 38 observations, F has 34, and C
+has 12. C rookies therefore keep incomplete lines and are skipped instead of
+receiving invented or borrowed numbers. Run `python -m cli.rookie_audit` for
+the offline identity, roster, projection coverage, and comparator report.
+
+Manual per-game opportunity multipliers are 1.30 for Darryn Peterson, 1.15 for
+AJ Dybantsa, 1.00 for Cameron Boozer, and 0.70 for Aday Mara, Jayden
+Quaintance, and Chris Cenac Jr. These scale per-game opportunity components,
+not GP, and do not represent minutes projections. All other rookies use 1.00.
+Upcoming work still needs real 2026-27 actuals, game logs, reliable refreshes,
+and in-season recommendations; automatic daily updates remain a future
+requirement and are not implemented here.
 
 ## Current-roster projection eligibility
 
@@ -199,8 +224,9 @@ as the current-membership gate. All team responses must be present and
 non-empty; if the cache is incomplete, the projection command stops with an
 error instead of presenting missing cache entries as confirmed exclusions.
 Fallback-only players do not qualify for the current board. A current-roster
-player with no cached NBA stats is also omitted until a verified statistical
-projection source is available.
+player with no cached NBA stats is omitted unless a season-scoped projection
+source exists; the verified 2026 first-round class uses the provisional
+historical baseline described above.
 
 Players on the current roster who missed the latest completed stats season can
 be projected from the three most recent cached seasons when their latest NBA
@@ -218,10 +244,10 @@ player-population behavior; no future roster snapshot is used to decide who
 could have been projected then. The backtest has no properly timed historical
 roster snapshots, so its scores do not evaluate this new returner policy.
 
-The next planned work is to verify and rebuild rookie projections, then add
-current-season actual statistics. Automatic daily stats and roster refreshes
-are later work; this batch does not schedule jobs or overwrite historical
-season caches or saved preseason baselines.
+The next planned work is to add current-season actual statistics and game logs,
+reliable refreshes, and in-season roster recommendations. Automatic daily stats
+and roster updates remain a future requirement; this batch does not schedule
+jobs or overwrite historical season caches or saved preseason baselines.
 
 - **`data/role_overrides.json`** -- season-scoped `{nba_id: multiplier}`. Its
   `_season` metadata must match the projection target season; mismatched files

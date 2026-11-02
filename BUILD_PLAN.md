@@ -6,6 +6,10 @@ This file defines *what to build next and in what order*.
 Updated 2026-10-23. Batch 1 was completed at commit `c95ee54` with 192 tests
 passing. Batch 2 was completed at commit `f1ac432` with 196 tests passing.
 
+Batch 3 completed at commit `1d0e415`: 205 tests passed. Its returning-player
+and strict current-roster eligibility behavior shipped without changing the
+historical backtest (358 players; Spearman 0.689 with role trends enabled).
+
 ### Batch 1 — correctness cleanup (complete)
 
 - `--role-audit` now reports model trend and effective override separately.
@@ -42,20 +46,51 @@ completed seasons if their last appearance is no more than two missed seasons
 old. Their age advances by the actual season gap; expected games receive a
 named 0.75-per-missed-season availability assumption. The returner history is
 not treated as a consecutive playing-season minutes trend. Roster presence
-does not establish health or playing status. Regression tests are added, with
-results pending the user's run.
+does not establish health or playing status. Regression tests passed in the
+205-test full suite at commit `1d0e415`.
 
 Historical projections and the backtest continue using their prior population
 and no future current-roster membership. Because the repository has no
 historically timed roster snapshots, the backtest does not evaluate the new
-returner eligibility policy; no comparable score is claimed.
+returner eligibility policy; no comparable score is claimed. The unchanged
+historical backtest has 358 players and Spearman 0.689 with role trends enabled. The unchanged
+historical backtest has 358 players and Spearman 0.689 with role trends enabled.
 
-The verified rookie rebuild also remains upcoming. The current
-`data/rookies_2026.json` contains synthetic negative IDs and null stat lines;
-Batch 3 does not verify rookie identities or create stat projections. Current-
-season actual ingestion and automatic daily stats/roster updates are later
-batches; they must preserve historical season caches and saved preseason
-projection baselines.
+Batch 4 completes the verified rookie rebuild and adds offline statistical
+baselines; current-season actual ingestion and automatic daily stats/roster
+updates remain later work and must preserve historical caches and saved
+preseason projection baselines.
+
+### Batch 4 — verified 2026 rookies and provisional baselines
+
+`data/rookies_2026.json` contains the 30 first-round selections and real NBA
+IDs. Pick/name order is from [NBA.com 2026 Draft Results](https://www.nba.com/news/2026-nba-draft-order); IDs, current team, and coarse
+position are matched by ID to the committed 2026-27 `CommonTeamRoster` cache.
+The cache has a replacement character where the accented letter in Karim López
+should be; the official spelling is retained and identity matching normalizes
+that known cache corruption. Age is left unknown because no age source
+was recorded for these entries.
+
+`engine/rookie_baseline.py` reads the six committed regular-season `PerGame`
+stat caches from 2020-21 through 2025-26. Comparators have age <= 20, at least
+40 games, complete observed stat components, and one current 2026-27 roster
+position proxy. One player-season counts once. Multi-position assignments use
+a deterministic C > F > G precedence. This later-roster proxy can misstate a
+player's position in an earlier season and the group is historical young-player
+seasons, not verified rookie seasons. Component medians are used; points and
+percentages are derived from makes and attempts. A position requires 20 rows.
+Recalculated sample sizes: G 38, F 34, C 12. Therefore G/F baselines are
+available and C baselines are unsupported; rookies classified C remain off the
+board with incomplete lines.
+
+Supported lines are provisional historical estimates, not actual NBA results
+or validated individual forecasts. Manual opportunity multipliers are 1.30 for
+Darryn Peterson, 1.15 for AJ Dybantsa, 1.00 for Cameron Boozer, and 0.70 each
+for Aday Mara, Jayden Quaintance, and Chris Cenac Jr. They scale per-game
+opportunity components only, not games played, and are not minutes projections.
+Other rookies use 1.00. The cache-only report
+`python -m cli.rookie_audit` checks identity, roster membership, sample sizes,
+unsupported projections, and expected current-board additions.
 
 ---
 
@@ -87,7 +122,7 @@ point. Batch 1's later 192-test result is recorded above.
 | B2 the CLI | Done. `python -m cli.board`. |
 | C1 ingest positions/teams | Done (`ingest/nba_rosters.py`, `CommonTeamRoster`, per-team disk cache). |
 | C2 position-aware replacement | Done. `REPLACEMENT_MODES` = flat / hybrid / strict; **flat stays default** (see Decisions). |
-| C3 rookies | Loader/merge done; verified rebuild upcoming. Current 17 entries use synthetic negative IDs and null stats, so none reach the board. |
+| C3 rookies | Batch 4: 30 verified first-round identities, real NBA IDs, conservative G/F historical baselines, center baseline withheld for insufficient sample. |
 | C4 role overrides | Override application and explanation done; numeric decisions open. Current file has no numeric entries. `_season` scopes the file; verify each judgment and rationale against refreshed roster data before adding. |
 | C5 crosswalk override map | Done. `crosswalk/overrides.json` (ships empty) + `load_overrides()`/`resolve()`; `names.py` no longer a spike. |
 

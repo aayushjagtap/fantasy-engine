@@ -132,12 +132,10 @@ def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1
     and season labels, current-roster members with recent older NBA history can
     also be projected. The roster is an eligibility signal, not health evidence.
 
-    rookies ({nba_id: projected_line}, e.g. from load_rookies()): hand-entered
-    draft-class lines with no NBA history to project from. Merged in after the
-    projection loop via setdefault, so a real projection always wins an id
-    collision. Each carries is_rookie=True so the board can mark them and the
-    backtest can leave them out (the backtest simply never passes this arg --
-    a future draft class has nothing to say about a past season).
+    rookies ({nba_id: projected_line}, e.g. from load_rookies()): season-scoped
+    draft-class lines with no prior NBA history to project from. Merged after
+    the projection loop via setdefault, so a real projection always wins an ID
+    collision. Each carries is_rookie=True for board labeling.
 
     role_overrides ({nba_id: multiplier}, e.g. from load_role_overrides()):
     applied AFTER _role_trend_mult and REPLACING it -- the minutes-trajectory
@@ -250,11 +248,12 @@ def project_players(seasons_newest_first: list[dict], target_age_offset: int = 1
                                  if current_roster is not None else None)
         projected[pid] = line
 
-    # C3: merge hand-entered draft-class rookies. setdefault so a real projection
-    # (should an id ever collide -- synthetic negative ids make that near-impossible)
-    # is never clobbered by a hand line.
+    # Merge season-scoped rookie estimates without replacing a real projection.
     for pid, rookie_line in (rookies or {}).items():
         if current_roster is not None and pid not in current_roster:
+            continue
+        if (target_season is not None and rookie_line.get("rookie_season") is not None
+                and rookie_line["rookie_season"] != target_season):
             continue
         projected.setdefault(pid, rookie_line)
 
@@ -305,8 +304,11 @@ _ROOKIE_REQUIRED_STATS = ("gp", "min", "fgm", "fga", "fg3m", "ftm", "fta",
                           "reb", "ast", "stl", "blk", "tov")
 
 
-def _rookie_line(entry: dict) -> dict:
-    """One data/rookies_2026.json entry -> a line shaped like project_players' output."""
+def _rookie_line(entry: dict, baseline: dict | None = None) -> dict | None:
+    """One data/rookies_2026.json entry -> a projected line or incomplete skip."""
+    if any(entry.get(k) is None for k in _ROOKIE_REQUIRED_STATS):
+        from engine.rookie_baseline import make_rookie_line
+        return make_rookie_line(entry, baseline)
     line = {k: float(entry[k]) for k in _ROOKIE_REQUIRED_STATS}
     line["pts"] = 2 * line["fgm"] + line["fg3m"] + line["ftm"]
     line["fg_pct"] = (line["fgm"] / line["fga"]) if line["fga"] else 0.0
@@ -318,22 +320,28 @@ def _rookie_line(entry: dict) -> dict:
     line["team"] = entry.get("team")
     line["role_mult"] = 1.0  # no history -> no trajectory to trend
     line["is_rookie"] = True
+    line["projection_source"] = entry.get("projection_source", "manual")
+    line["rookie_season"] = "2026-27"
+    line["projection_is_estimate"] = True
+    line["draft_pick"] = entry.get("draft_pick")
+    line["comparator_sample_size"] = entry.get("comparator_sample_size")
+    line["comparator_position"] = entry.get("comparator_position")
+    line["comparator_criteria"] = entry.get("comparator_criteria")
+    line["manual_opportunity_multiplier"] = entry.get("manual_opportunity_multiplier")
     return line
 
 
 def load_rookies(path: str = ROOKIES_PATH, verbose: bool = True,
                  target_season: str | None = None) -> dict[int, dict]:
-    """{nba_id: projected_line} for hand-entered draft-class rookies.
+    """{nba_id: projected_line} for the season-scoped first-round class.
 
     When target_season is supplied, the file's top-level season must match;
     this keeps current hand data out of historical projections.
 
-    An entry whose stat line is incomplete (any of _ROOKIE_REQUIRED_STATS null
-    or missing) is SKIPPED -- the shipped file has null stat lines by design, so
-    an unfilled rookie stays off the board rather than being rendered as a
-    fabricated projection indistinguishable from a real one. The skipped count
-    is logged to stderr (verbose=True) so the omission is visible. A missing
-    file returns {} (rookies are optional)."""
+    Incomplete entries are filled only from supported historical position
+    baselines. Unsupported lines are skipped, never converted to zeroes. The
+    skipped count is logged to stderr (verbose=True); cli.rookie_audit explains
+    specific omissions. A missing file returns {}."""
     if not os.path.exists(path):
         return {}
     with open(path, "r", encoding="utf-8") as f:
@@ -342,14 +350,23 @@ def load_rookies(path: str = ROOKIES_PATH, verbose: bool = True,
         return {}
     out: dict[int, dict] = {}
     skipped = 0
+    baselines = {}
+    if any(any(entry.get(k) is None for k in _ROOKIE_REQUIRED_STATS)
+           for entry in doc.get("rookies", [])):
+        try:
+            from engine.rookie_baseline import load_comparator_baselines
+            baselines, _meta = load_comparator_baselines()
+        except (OSError, ValueError, KeyError, IndexError):
+            baselines = {}
     for entry in doc.get("rookies", []):
-        if any(entry.get(k) is None for k in _ROOKIE_REQUIRED_STATS):
+        line = _rookie_line(entry, baselines.get(entry.get("baseline_position")))
+        if line is None:
             skipped += 1
             continue
-        out[int(entry["nba_id"])] = _rookie_line(entry)
+        out[int(entry["nba_id"])] = line
     if verbose and skipped:
-        print(f"load_rookies: {len(out)} rookie(s) with a full stat line, {skipped} "
-              f"skipped (stat line not yet filled in {os.path.basename(path)})",
+        print(f"load_rookies: {len(out)} rookie(s) projected, {skipped} "
+              f"skipped (incomplete or unsupported baseline in {os.path.basename(path)})",
               file=sys.stderr)
     return out
 
